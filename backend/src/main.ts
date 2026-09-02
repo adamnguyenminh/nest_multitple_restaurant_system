@@ -1,8 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { RedisIoAdapterService } from './redis/redis_io.adapter.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Kích hoạt Adapter cho Worker
+  const redisIoAdapter = new RedisIoAdapterService(app);
+  await redisIoAdapter.connectToRedis();
+  // Đăng ký WebSocket Adapter tại HTTP Server
+  app.useWebSocketAdapter(redisIoAdapter);
+
   await app.listen(process.env.PORT ?? 3000);
+  console.log('🚀 Gateway is running on http://localhost:3000');
 }
 bootstrap();
