@@ -36,6 +36,7 @@ export class TablesService {
         .createQueryBuilder(Table, 'table')
         .setLock('pessimistic_read')
         .setOnLocked('skip_locked')
+        .where('table.restaurant_id = :restaurant_id', { restaurant_id: 1 })
         .where('table.capacity >= :capacity', { capacity })
         .andWhere('table.status = :status', { status: TableStatus.AVAILABLE })
         .orderBy('table.capacity', 'ASC')
@@ -82,9 +83,8 @@ export class TablesService {
   /**
    * Cập nhật trạng thái bàn thủ công (SEATED, CLEANING, AVAILABLE)
    */
-  async updateStatus(tableId: number, status: TableStatus) {
-    const dataSource =
-      this.shardRouterService.getDataSourceByTableIndex(tableId);
+  async updateStatus(tableId: number, shardId: number, status: TableStatus) {
+    const dataSource = this.shardRouterService.getDataSourceByShardId(shardId);
 
     const table = await dataSource
       .getRepository(Table)

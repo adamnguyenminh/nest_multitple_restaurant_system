@@ -22,11 +22,11 @@ export class TablesController {
     );
   }
 
-  @Patch(':id/status')
+  @Patch('status/:id')
   async updateStatus(
     @Param('id') id: string,
-    @Body() body: { status: TableStatus },
+    @Body() body: { shard_id: number; status: TableStatus },
   ) {
-    return this.tablesService.updateStatus(+id, body.status);
+    return this.tablesService.updateStatus(+id, body.shard_id, body.status);
   }
 }
