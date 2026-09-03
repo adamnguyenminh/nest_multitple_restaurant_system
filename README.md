@@ -100,3 +100,115 @@ Tách biệt Process & Transport: Không dùng app.useWebSocketAdapter() trong M
 Safe Redis Connection Lifecycle: Khởi tạo createClient() trong constructor của RedisService và luôn kiểm tra trạng thái isOpen trước khi gọi .publish() hoặc .subscribe() để tránh lỗi undefined.
 
 NestJS App Initialization: Luôn gọi await app.init() trong file main.ts nếu các Gateway/Adapter phụ thuộc vào onModuleInit() của các Global Provider khác.
+
+### 💓 Heartbeat Failure Simulation & Reconnection Strategy
+
+Trong môi trường phân tán, việc xử lý các kết nối "ma" (Ghost Connections - do rớt mạng đột ngột mà Client không kịp gửi gói `disconnect`) là cực kỳ quan trọng. Hệ thống sử dụng cơ chế Ping/Pong của Engine.IO kết hợp với Test Hook tại Gateway để kiểm thử luồng tự động kết nối lại (Auto-Reconnect).
+
+### 1. Cấu hình Heartbeat tại Gateway (`realtime.gateway.ts`)
+
+Bổ sung các tham số `pingInterval` và `pingTimeout` tại decorator `@WebSocketGateway`:
+
+```typescript
+@WebSocketGateway({
+  cors: { origin: '*' },
+  pingInterval: 5000, // Gửi Ping mỗi 5 giây
+  pingTimeout: 3000,  // Quá 3 giây không nhận gói Pong -> Coi như đứt mạng
+})
+```
+
+### 2. Kỹ thuật Test Hook giả lập Ping Timeout tại Server
+
+Do cơ chế Multi-Process của Postman Desktop (Electron) và các ràng buộc bảo mật trên Browser khiến việc can thiệp vào gói Pong từ phía Client gặp nhiều hạn chế, hệ thống thiết lập 1 Test Hook (simulate_heartbeat_fail) trực tiếp tại Server để chủ động tạo ra sự cố Heartbeat Fail.
+
+Implementation Code:
+
+```TypeScript
+// realtime.gateway.ts
+@SubscribeMessage('simulate_heartbeat_fail')
+handleSimulateHeartbeatFail(client: Socket) {
+  console.log(`🧪 [Test Hook] Giả lập Heartbeat Fail cho Socket: ${client.id}`);
+
+  const engineSocket = (client as any).conn;
+
+  if (engineSocket) {
+    // 1. Gỡ bỏ Listener xử lý gói tin của Transport Layer -> Chặn việc tiếp nhận Pong
+    const transport = engineSocket.transport;
+    if (transport) {
+      transport.removeAllListeners('packet');
+      console.log(`🚫 [Server] Đã gỡ bỏ Packet Listeners của Socket ${client.id}`);
+    }
+
+    // 2. Can thiệp Timer -> Ép Server trigger Ping Timeout sau 2 giây
+    if (engineSocket.pingTimeoutTimer) {
+      clearTimeout(engineSocket.pingTimeoutTimer);
+
+      engineSocket.pingTimeoutTimer = setTimeout(() => {
+        console.log(`⏱️ [Server] Hết thời gian chờ Pong -> Trigger Ping Timeout`);
+        engineSocket.onClose('ping timeout');
+      }, 2000);
+    }
+  }
+
+  return { status: 'success', message: 'Heartbeat fail triggered! Socket will drop in 2 seconds.' };
+}
+```
+
+### 3. Kịch bản Kiểm thử & Luồng Tự động Reconnect
+
+## A. Kiểm thử qua Node.js Client Script (test-client.ts)
+
+```TypeScript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:3000', {
+  auth: { token: 'YOUR_JWT_TOKEN' },
+  transports: ['websocket'],
+  reconnection: true,        // Kích hoạt cơ chế tự động kết nối lại
+  reconnectionAttempts: 5,   // Thử lại tối đa 5 lần
+  reconnectionDelay: 1000,   // Chờ 1 giây trước mỗi lần thử lại
+});
+
+socket.on('connect', () => {
+  console.log(`✅ Connected với Socket ID mới: ${socket.id}`);
+
+  // Chỉ trigger Test Hook ở lần kết nối đầu tiên
+  if (!(socket as any)._hasTestedFail) {
+    (socket as any)._hasTestedFail = true;
+    setTimeout(() => socket.emit('simulate_heartbeat_fail', {}), 1000);
+  } else {
+    console.log('🎉 RECONNECT THÀNH CÔNG VÀ TIẾP TỤC HOẠT ĐỘNG!');
+  }
+});
+
+socket.on('disconnect', (reason) => {
+  console.warn(`⚠️ Disconnected. Reason: [${reason}] -> Đang tự động reconnect...`);
+});
+```
+
+## B. Các bước Test cực đơn giản trực tiếp trên Postman (Không cần DevTools/Script)
+
+- Mở Postman, bấm Connect tới http://localhost:3000.
+- Chuyển sang tab Message trên Postman.
+- Nhập Event Name: simulate_heartbeat_fail, nội dung payload: {}.
+- Bấm Send.
+- Quan sát Terminal NestJS Server:
+  - Ngay khi nhận event, Server báo: 🧪 [Test Hook] Đã kích hoạt giả lập Heartbeat Fail...
+  - Ở kỳ Ping tiếp theo, Server nhận Pong nhưng log out: 🚫 Server nhận gói Pong từ ... nhưng cố tình BỎ QUA!
+  - Đúng $5s + 3s = 8s$ sau, Server tự động ngắt kết nối và in log:
+
+```bash
+❌ Client disconnected: <socket_id>. Lý do: [ping timeout]
+```
+
+## 💡 Ưu điểm của cách này
+
+- Không cần đụng vào Client/DevTools: Mọi thứ được xử lý 100% bằng cách gửi 1 WebSocket Message từ Postman.
+- Chính xác & Cục bộ: Chỉ socket nào gửi event simulate_heartbeat_fail mới bị drop connection, các client/Postman tabs khác vẫn hoạt động bình thường.
+- Dễ tích hợp Automation: Sau này làm E2E Test chỉ cần gọi event này để test luồng reconnect của Frontend.
+
+## C. 🔑 Key Takeaways về Heartbeat & Reconnection
+
+- Transport-Level Isolation: Việc can thiệp trực tiếp vào transport.removeAllListeners('packet') trên engineSocket giúp test chính xác cơ chế timeout ở Server mà không làm ảnh hưởng tới các Client Socket khác đang kết nối.
+
+- Stateless Handshake Security: Vì thông tin Auth và Multi-tenant (restaurant_id) nằm trong JWT Token gửi kèm Handshake, khi Client tự reconnect (tạo Socket ID mới), Gateway sẽ tự động khôi phục đúng Room mà không cần Client phải gửi thêm lệnh Join Room thủ công.
