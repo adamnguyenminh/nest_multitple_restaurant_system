@@ -57,12 +57,15 @@ export class TablesService {
 
       // 3. Bắn Event vào RabbitMQ (Async notification)
       const eventPayload = {
-        eventId: Date.now(),
-        tableId: table.id,
-        code: table.code,
-        status: table.status,
-        customerName,
-        timestamp: new Date(),
+        restaurant_id: table.restaurantId,
+        table: {
+          eventId: Date.now(),
+          tableId: table.id,
+          code: table.code,
+          status: table.status,
+          customerName,
+          timestamp: new Date(),
+        },
       };
 
       this.rabbitmqClient.emit('table_status_changed', eventPayload);

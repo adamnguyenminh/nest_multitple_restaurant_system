@@ -17,7 +17,7 @@ export class SyncConsumer {
 
   @EventPattern('table_status_changed')
   async handleTableStatusChanged(
-    @Payload() data: TableStatusPayload | any,
+    @Payload() data: { restaurant_id: string; table: TableStatusPayload } | any,
     @Ctx() context: any,
   ) {
     // 1. Cast kiểu chuẩn RmqContext
@@ -27,11 +27,17 @@ export class SyncConsumer {
 
     try {
       console.log(
-        `📥 [RabbitMQ Consumer] Nhận event bàn ${data.code}: ${data.status}`,
+        `📥 [RabbitMQ Consumer] Nhận event bàn ${data.table?.code}: ${data.table?.status}`,
       );
 
+      // 0. Đóng gói Payload chứa restaurant_id để Gateway lọc Room
+      const redisPayload = {
+        restaurant_id: data.restaurant_id,
+        data: data.table,
+      };
+
       // 1. Bắn event qua Redis Channel có tên 'REALTIME_TABLE_UPDATE'
-      await this.redisService.publish('REALTIME_TABLE_UPDATE', data);
+      await this.redisService.publish('REALTIME_TABLE_UPDATE', redisPayload);
 
       // 2. Acknowledge tin nhắn xử lý thành công
       channel.ack(originalMsg);
