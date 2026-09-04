@@ -1,9 +1,19 @@
-import { Controller, Post, Patch, Param, Body } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Patch,
+  Param,
+  Body,
+  UseGuards,
+} from '@nestjs/common';
 import { TablesService } from './tables.service';
 import { CreateReserveDto } from './dto/reserve_table.dto';
 import { UpdateTableDto } from './dto/update_table.dto';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/guards/roles.decorator';
 
 @Controller('tables')
+@UseGuards(RolesGuard)
 export class TablesController {
   constructor(private readonly tablesService: TablesService) {}
 
@@ -16,6 +26,7 @@ export class TablesController {
   }
 
   @Patch('status/:id')
+  @Roles('admin', 'manager')
   async updateStatus(
     @Param('id') id: string,
     @Body() updateTableDto: UpdateTableDto,
