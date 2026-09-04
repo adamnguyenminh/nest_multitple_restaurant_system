@@ -7,29 +7,27 @@ import {
 import { ClientProxy } from '@nestjs/microservices';
 import { ShardRouterService } from '../database/shard_router.service';
 import { Table, TableStatus } from './entities/table.entity';
+import { CreateReserveDto } from './dto/reserve_table.dto';
+import { TableRepository } from './table.repository';
+import { UpdateTableDto } from './dto/update_table.dto';
 
 @Injectable()
 export class TablesService {
   constructor(
+    private tableRepository: TableRepository,
     private readonly shardRouterService: ShardRouterService,
     @Inject('TABLE_EVENT_SERVICE') private readonly rabbitmqClient: ClientProxy,
   ) {}
 
-  async reserveAnyTable(
-    requestIndex: number | string,
-    capacity: number,
-    customerName: string,
-  ) {
-    const dataSource =
-      this.shardRouterService.getDataSourceBytaSourceByRequestIndex(
-        requestIndex,
-      );
+  async reserveAnyTable(CreateReserveDto: CreateReserveDto) {
+    const dataSource = this.shardRouterService.getDataSourceByShardId(0);
     const queryRunner = dataSource.createQueryRunner();
 
     await queryRunner.connect();
     await queryRunner.startTransaction('READ COMMITTED');
 
     try {
+      let capacity = CreateReserveDto.capacity || 2;
       // 1. Khóa và lấy ra 1 bàn AVAILABLE phù hợp gần nhất
       // MYSQL FOR UPDATE SKIP LOCKED sẽ bỏ qua các bàn đang bị Lock bởi Transaction khác
       const table = await queryRunner.manager
@@ -37,15 +35,18 @@ export class TablesService {
         .setLock('pessimistic_read')
         .setOnLocked('skip_locked')
         .where('table.restaurant_id = :restaurant_id', { restaurant_id: 1 })
-        .where('table.capacity >= :capacity', { capacity })
+        .where('table.capacity >= :min_capacity', {
+          min_capacity: capacity,
+        })
+        .where('table.capacity <= :max_capacity', {
+          max_capacity: capacity + 2,
+        })
         .andWhere('table.status = :status', { status: TableStatus.AVAILABLE })
         .orderBy('table.capacity', 'ASC')
         .getOne();
 
       if (!table) {
-        throw new ConflictException(
-          'Hệ thống đang quá tải hoặc không còn bàn trống phù hợp!',
-        );
+        throw new ConflictException('Không còn bàn trống phù hợp!');
       }
 
       // 2. Cập nhật trạng thái
@@ -63,7 +64,7 @@ export class TablesService {
           tableId: table.id,
           code: table.code,
           status: table.status,
-          customerName,
+          customerName: CreateReserveDto.customerName ?? 'Guest',
           timestamp: new Date(),
         },
       };
@@ -86,16 +87,12 @@ export class TablesService {
   /**
    * Cập nhật trạng thái bàn thủ công (SEATED, CLEANING, AVAILABLE)
    */
-  async updateStatus(tableId: number, shardId: number, status: TableStatus) {
-    const dataSource = this.shardRouterService.getDataSourceByShardId(shardId);
-
-    const table = await dataSource
-      .getRepository(Table)
-      .findOneBy({ id: tableId });
+  async updateStatus(tableId: number, updateTableDto: UpdateTableDto) {
+    const table = await this.findOne(tableId);
     if (!table) throw new NotFoundException('Không tìm thấy bàn!');
 
-    table.status = status;
-    const updatedTable = await dataSource.getRepository(Table).save(table);
+    table.status = updateTableDto.status;
+    const updatedTable = await this.tableRepository.save(table);
 
     // Bắn Event
     this.rabbitmqClient.emit('table_status_changed', {
@@ -107,5 +104,17 @@ export class TablesService {
     });
 
     return updatedTable;
+  }
+
+  findAll(): Promise<Table[]> {
+    return this.tableRepository.find();
+  }
+
+  findOne(id: number): Promise<Table | null> {
+    return this.tableRepository.findOneBy({ id });
+  }
+
+  async remove(id: number): Promise<void> {
+    await this.tableRepository.delete(id);
   }
 }

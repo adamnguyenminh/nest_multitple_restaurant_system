@@ -7,7 +7,7 @@ SET @inventory_group_id = 1;
 
 -- Cấu hình quy mô hệ thống
 SET @total_shards = 3;                       -- Tổng số Shard trong cluster
-SET @total_tables_per_restaurant = 300;     -- Tổng số bàn của nhà hàng (chia đều cho các Shard)
+SET @total_tables_per_restaurant = 10;     -- Tổng số bàn của nhà hàng (chia đều cho các Shard)
 
 -- Tự động trích xuất ID Shard hiện tại từ tên Database (VD: db_shard_0 -> lấy ra 0)
 SET @current_shard_id = IFNULL(CAST(RIGHT(DATABASE(), 1) AS UNSIGNED), 0);
@@ -71,13 +71,9 @@ BEGIN
         SET i = i + 1;
     END WHILE;
 
-    -- -------------------------------------------------------------
-    -- B. Seed Bàn PHÂN TÁN (Modulo Routing: table_id % total_shards)
-    -- -------------------------------------------------------------
-    WHILE table_idx <= @total_tables_per_restaurant DO
-        
-        IF (table_idx % @total_shards) = @current_shard_id THEN
-            
+    IF @current_shard_id = 0 THEN
+        WHILE table_idx <= @total_tables_per_restaurant DO
+
             SET capacity_val = CASE 
                 WHEN table_idx % 5 = 1 THEN 2
                 WHEN table_idx % 5 = 2 THEN 4
@@ -99,10 +95,11 @@ BEGIN
                 'AVAILABLE',
                 @current_shard_id
             );
-        END IF;
+            
+            SET table_idx = table_idx + 1;
 
-        SET table_idx = table_idx + 1;
-    END WHILE;
+        END WHILE;
+    END IF;
 
 END$$
 

@@ -1,15 +1,28 @@
 import { Module } from '@nestjs/common';
+import { DataSource } from 'typeorm';
+import { getDataSourceToken } from '@nestjs/typeorm';
 import { TablesController } from './tables.controller';
 import { TablesService } from './tables.service';
 import { ShardRouterService } from '../database/shard_router.service';
 import { EntityRegistry } from '../database/entity_registry.service';
 import { Table } from './entities/table.entity';
+import { TableRepository } from './table.repository';
+import { SHARD_CONNECTIONS } from '../database/database.constants';
 
 // Module tự đăng ký Table entity vào Registry
 EntityRegistry.register([Table]);
 
 @Module({
   controllers: [TablesController],
-  providers: [TablesService, ShardRouterService],
+  providers: [
+    TablesService,
+    ShardRouterService,
+    {
+      provide: TableRepository,
+      useFactory: (dataSource: DataSource) => new TableRepository(dataSource),
+      inject: [getDataSourceToken(SHARD_CONNECTIONS.SHARD_0)], // Ràng buộc chính xác SHARD_0
+    },
+  ],
+  exports: [TableRepository],
 })
 export class TablesModule {}
