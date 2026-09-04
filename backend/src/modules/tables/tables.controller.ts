@@ -5,15 +5,18 @@ import {
   Param,
   Body,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { TablesService } from './tables.service';
 import { CreateReserveDto } from './dto/reserve_table.dto';
 import { UpdateTableDto } from './dto/update_table.dto';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/guards/roles.decorator';
+import { AuditAndTransformInterceptor } from '../../common/interceptors/audit-and-transform.interceptor';
 
 @Controller('tables')
 @UseGuards(RolesGuard)
+@UseInterceptors(AuditAndTransformInterceptor)
 export class TablesController {
   constructor(private readonly tablesService: TablesService) {}
 
