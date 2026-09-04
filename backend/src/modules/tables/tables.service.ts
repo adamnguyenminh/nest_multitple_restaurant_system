@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { ShardRouterService } from '../database/shard_router.service';
+import { ShardRouterService } from '../../core/database/shard_router.service';
 import { Table, TableStatus } from './entities/table.entity';
 import { CreateReserveDto } from './dto/reserve_table.dto';
 import { TableRepository } from './table.repository';

@@ -3,11 +3,11 @@ import { DataSource } from 'typeorm';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { TablesController } from './tables.controller';
 import { TablesService } from './tables.service';
-import { ShardRouterService } from '../database/shard_router.service';
-import { EntityRegistry } from '../database/entity_registry.service';
+import { ShardRouterService } from '../../core/database/shard_router.service';
+import { EntityRegistry } from '../../core/database/entity_registry.service';
 import { Table } from './entities/table.entity';
 import { TableRepository } from './table.repository';
-import { SHARD_CONNECTIONS } from '../database/database.constants';
+import { SHARD_CONNECTIONS } from '../../core/database/database.constants';
 
 // Module tự đăng ký Table entity vào Registry
 EntityRegistry.register([Table]);

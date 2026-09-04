@@ -1,6 +1,5 @@
 import { Controller, Post, Patch, Param, Body } from '@nestjs/common';
 import { TablesService } from './tables.service';
-import { TableStatus } from './entities/table.entity';
 import { CreateReserveDto } from './dto/reserve_table.dto';
 import { UpdateTableDto } from './dto/update_table.dto';
 

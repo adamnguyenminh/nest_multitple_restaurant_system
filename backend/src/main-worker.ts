@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
-import { RedisIoAdapterService } from './redis/redis_io.adapter.service';
+import { RedisIoAdapterService } from './core/redis/redis_io.adapter.service';
 
 async function bootstrap() {
   const app = await NestFactory.createMicroservice<MicroserviceOptions>(

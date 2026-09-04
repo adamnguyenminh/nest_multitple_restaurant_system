@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { RedisIoAdapterService } from './redis/redis_io.adapter.service';
+import { RedisIoAdapterService } from './core/redis/redis_io.adapter.service';
 import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
