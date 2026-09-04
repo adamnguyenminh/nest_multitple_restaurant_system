@@ -1,3 +1,15 @@
+# PM2
+
+pm2 start ecosystem.config.js
+
+pm2 logs restaurant-worker
+
+pm2 logs nestjs-restaurant-api
+
+pm2 flush && pm2 delete all && pm2 cleardump && pm2 kill (Dọn dẹp sạch sẽ PM2)
+
+# --------------------------------------------------------
+
 # Khởi tạo NestJS app trong thư mục backend
 
 npx @nestjs/cli new backend --strict --skip-git --package-manager npm
