@@ -27,7 +27,7 @@ export class SyncConsumer {
 
     try {
       console.log(
-        `📥 [RabbitMQ Consumer] Nhận event bàn ${data.table?.code}: ${data.table?.status}`,
+        `[RabbitMQ Consumer] Nhận event bàn ${data.table?.code}: ${data.table?.status}`,
       );
 
       // 0. Đóng gói Payload chứa restaurant_id để Gateway lọc Room
@@ -42,7 +42,7 @@ export class SyncConsumer {
       // 2. Acknowledge tin nhắn xử lý thành công
       channel.ack(originalMsg);
     } catch (error) {
-      console.error('❌ Lỗi xử lý RabbitMQ Consumer:', error);
+      console.error('Lỗi xử lý RabbitMQ Consumer:', error);
 
       // Báo nack để RabbitMQ Requeue lại message nếu cần
       channel.nack(originalMsg, false, false);

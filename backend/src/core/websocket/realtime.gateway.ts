@@ -28,16 +28,16 @@ export class RealtimeGateway
   constructor(private readonly redisService: RedisService) {}
 
   async afterInit() {
-    console.log('⚡ [Gateway] Đang đăng ký Redis Channel...');
+    console.log('[Gateway] Đang đăng ký Redis Channel...');
 
     try {
       await this.redisService.subscribe('REALTIME_TABLE_UPDATE', (payload) => {
-        console.log('📢 [Gateway] Nhận message từ Redis Pub/Sub:', payload);
+        console.log('[Gateway] Nhận message từ Redis Pub/Sub:', payload);
         const { restaurant_id, data } = payload;
         if (restaurant_id) {
           const roomName = `restaurant_${restaurant_id}`;
           console.log(
-            `📢 [Gateway] Broadcast event [table_updated] tới Room: ${roomName}`,
+            `[Gateway] Broadcast event [table_updated] tới Room: ${roomName}`,
           );
 
           // CHỈ EMIT TỚI CLIENT TRONG ROOM CỦA NHÀ HÀNG NÀY
@@ -46,10 +46,10 @@ export class RealtimeGateway
         // this.server.emit('table_updated', data);
       });
       console.log(
-        '✅ [Gateway] Lắng nghe Channel REALTIME_TABLE_UPDATE thành công!',
+        '[Gateway] Lắng nghe Channel REALTIME_TABLE_UPDATE thành công!',
       );
     } catch (error) {
-      console.error('❌ [Gateway] Lỗi khi subscribe Redis channel:', error);
+      console.error('[Gateway] Lỗi khi subscribe Redis channel:', error);
     }
   }
 
@@ -71,12 +71,12 @@ export class RealtimeGateway
   ) {
     const roomName = `restaurant_${payload.restaurant_id}`;
     client.join(roomName);
-    console.log(`📌 Client ${client.id} vừa join Room: ${roomName}`);
+    console.log(`Client ${client.id} vừa join Room: ${roomName}`);
     return { status: 'success', joined: roomName };
   }
 
   handleDisconnect(client: Socket) {
-    console.log(`❌ Client đã ngắt kết nối: ${client.id}`);
+    console.log(`Client đã ngắt kết nối: ${client.id}`);
   }
 
   // 2. Custom Application-Level Heartbeat (Dùng cho Client muốn chủ động ping check latency)
@@ -88,7 +88,7 @@ export class RealtimeGateway
   @SubscribeMessage('simulate_heartbeat_fail')
   handleSimulateHeartbeatFail(client: Socket) {
     console.log(
-      `🧪 [Test Hook] Đã kích hoạt giả lập Heartbeat Fail cho Socket: ${client.id}`,
+      `[Test Hook] Đã kích hoạt giả lập Heartbeat Fail cho Socket: ${client.id}`,
     );
 
     // 1. Truy cập vào Engine.IO Socket bên dưới
@@ -103,7 +103,7 @@ export class RealtimeGateway
         transport.removeAllListeners('packet');
 
         console.log(
-          `🚫 [Server] Đã gỡ bỏ toàn bộ Packet Listeners của Socket ${client.id}`,
+          `[Server] Đã gỡ bỏ toàn bộ Packet Listeners của Socket ${client.id}`,
         );
       }
 
@@ -115,7 +115,7 @@ export class RealtimeGateway
         // Khởi tạo một Timer mới ép ngắt kết nối sau đúng 2 giây với lý do 'ping timeout'
         engineSocket.pingTimeoutTimer = setTimeout(() => {
           console.log(
-            `⏱️ [Server] Hết thời gian chờ Pong -> Trigger Ping Timeout cho ${client.id}`,
+            `[Server] Hết thời gian chờ Pong -> Trigger Ping Timeout cho ${client.id}`,
           );
           engineSocket.onClose('ping timeout');
         }, 2000);
@@ -132,16 +132,16 @@ export class RealtimeGateway
    * Method công khai để Consumer hoặc Service khác gọi vào gửi Event
    */
   notifyTableUpdate(data: any) {
-    console.log('🔍 Kiểm tra this.server trong Gateway:', !!this.server);
+    console.log('Kiểm tra this.server trong Gateway:', !!this.server);
 
     if (!this.server) {
       console.error(
-        '❌ ERROR: this.server bị UNDEFINED! Consumer đang gọi một instance Gateway chưa được gắn Socket Server.',
+        'ERROR: this.server bị UNDEFINED! Consumer đang gọi một instance Gateway chưa được gắn Socket Server.',
       );
       return;
     }
 
-    console.log('📢 Emitting event [table_updated] tới tất cả clients...');
+    console.log('Emitting event [table_updated] tới tất cả clients...');
     this.server.emit('table_updated', data);
   }
 }

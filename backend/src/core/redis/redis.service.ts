@@ -27,7 +27,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     if (!this.subClient.isOpen) {
       await this.subClient.connect();
     }
-    console.log('⚡ Redis Service initialized successfully');
+    console.log('Redis Service initialized successfully');
   }
 
   async onModuleDestroy() {

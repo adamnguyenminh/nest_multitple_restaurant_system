@@ -30,7 +30,7 @@ export class RedisIoAdapterService extends IoAdapter {
     await Promise.all([pubClient.connect(), subClient.connect()]);
 
     this.adapterConstructor = createAdapter(pubClient, subClient);
-    console.log('⚡ RedisIoAdapter connected successfully!');
+    console.log('RedisIoAdapter connected successfully!');
   }
 
   createIOServer(port: number, options?: ServerOptions): any {

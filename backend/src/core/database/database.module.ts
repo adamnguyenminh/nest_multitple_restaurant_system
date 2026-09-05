@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SHARD_CONNECTIONS } from './database.constants';
 import { EntityRegistry } from './entity_registry.service';
+import { ShardRouterService } from './shard_router.service';
 
 @Global()
 @Module({
@@ -56,6 +57,7 @@ import { EntityRegistry } from './entity_registry.service';
       }),
     }),
   ],
-  providers: [EntityRegistry],
+  providers: [EntityRegistry, ShardRouterService],
+  exports: [EntityRegistry, ShardRouterService],
 })
 export class DatabaseModule {}
