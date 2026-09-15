@@ -1,0 +1,37 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+type AuthPayload {
+  accessToken: String!
+  refreshToken: String!
+  user: UserType!
+}
+
+input LoginInput {
+  email: String!
+  pass: String!
+}
+
+type Mutation {
+  login(input: LoginInput!): AuthPayload!
+  refreshToken(refreshToken: String!, userId: Float!): AuthPayload!
+  signUp(input: SignUpInput!): AuthPayload!
+}
+
+type Query {
+  adminOnlyData: String!
+  me: UserType!
+}
+
+input SignUpInput {
+  email: String!
+  password: String!
+  role: String = "user"
+}
+
+type UserType {
+  email: String!
+  id: Float!
+  role: String!
+}

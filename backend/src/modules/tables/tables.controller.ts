@@ -11,11 +11,12 @@ import { TablesService } from './tables.service';
 import { CreateReserveDto } from './dto/reserve_table.dto';
 import { UpdateTableDto } from './dto/update_table.dto';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { Roles } from '../../common/guards/roles.decorator';
+import { Roles } from '../../common/decorator/roles.decorator';
 import { AuditAndTransformInterceptor } from '../../common/interceptors/audit-and-transform.interceptor';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @Controller('tables')
-@UseGuards(RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @UseInterceptors(AuditAndTransformInterceptor)
 export class TablesController {
   constructor(private readonly tablesService: TablesService) {}
@@ -23,9 +24,9 @@ export class TablesController {
   @Post('reserve')
   async reserve(
     @Body()
-    CreateReserveDto: CreateReserveDto,
+    createReserveDto: CreateReserveDto,
   ) {
-    return this.tablesService.reserveAnyTable(CreateReserveDto);
+    return this.tablesService.reserveAnyTable(createReserveDto);
   }
 
   @Patch('status/:id')

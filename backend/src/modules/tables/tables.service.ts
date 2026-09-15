@@ -88,22 +88,26 @@ export class TablesService {
    * Cập nhật trạng thái bàn thủ công (SEATED, CLEANING, AVAILABLE)
    */
   async updateStatus(tableId: number, updateTableDto: UpdateTableDto) {
-    const table = await this.findOne(tableId);
-    if (!table) throw new NotFoundException('Không tìm thấy bàn!');
+    try {
+      const table = await this.findOne(tableId);
+      if (!table) throw new NotFoundException('Không tìm thấy bàn!');
 
-    table.status = updateTableDto.status;
-    const updatedTable = await this.tableRepository.save(table);
+      table.status = updateTableDto.status;
+      const updatedTable = await this.tableRepository.save(table);
 
-    // Bắn Event
-    this.rabbitmqClient.emit('table_status_changed', {
-      eventId: Date.now(),
-      tableId: updatedTable.id,
-      code: updatedTable.code,
-      status: updatedTable.status,
-      timestamp: new Date(),
-    });
+      // Bắn Event
+      this.rabbitmqClient.emit('table_status_changed', {
+        eventId: Date.now(),
+        tableId: updatedTable.id,
+        code: updatedTable.code,
+        status: updatedTable.status,
+        timestamp: new Date(),
+      });
 
-    return updatedTable;
+      return updatedTable;
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   findAll(): Promise<Table[]> {

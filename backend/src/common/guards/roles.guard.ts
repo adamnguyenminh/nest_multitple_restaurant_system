@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ROLES_KEY } from './roles.decorator';
+import { ROLES_KEY } from '../decorator/roles.decorator';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -26,15 +26,16 @@ export class RolesGuard implements CanActivate {
     // 2. Lấy object user (đã được AuthGuard/Middleware gán vào Request trước đó)
     const request = context.switchToHttp().getRequest();
     const user = request.user;
+    console.log(user);
 
-    if (!user || !user.roles) {
+    if (!user || !user.role) {
       throw new ForbiddenException(
         'Bạn không có quyền truy cập tài nguyên này',
       );
     }
 
     // 3. Kiểm tra user có chứa ít nhất 1 role yêu cầu không
-    const hasRole = requiredRoles.some((role) => user.roles.includes(role));
+    const hasRole = requiredRoles.some((role) => user.role.includes(role));
     if (!hasRole) {
       throw new ForbiddenException(
         `Yêu cầu quyền: ${requiredRoles.join(', ')}`,

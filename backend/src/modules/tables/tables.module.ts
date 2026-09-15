@@ -8,11 +8,13 @@ import { EntityRegistry } from '../../core/database/entity_registry.service';
 import { Table } from './entities/table.entity';
 import { TableRepository } from './table.repository';
 import { SHARD_CONNECTIONS } from '../../core/database/database.constants';
+import { JwtModule } from '@nestjs/jwt';
 
 // Module tự đăng ký Table entity vào Registry
 EntityRegistry.register([Table]);
 
 @Module({
+  imports: [JwtModule],
   controllers: [TablesController],
   providers: [
     TablesService,
