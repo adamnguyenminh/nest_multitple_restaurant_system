@@ -1,0 +1,184 @@
+version: "3.8"
+
+services:
+  # --- Read Database ---
+  mongodb:
+    image: mongo:6.0
+    container_name: restaurant_mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - nest_multiple_restaurant_net
+
+  # ==========================================
+  # DB SHARD 0
+  # ==========================================
+  db-shard-0:
+    image: mysql:8.4
+    container_name: mysql_shard_0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: restaurant_shard_0
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_shard_0_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+    networks:
+      - nest_multiple_restaurant_net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p$$MYSQL_ROOT_PASSWORD",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ==========================================
+  # DB SHARD 1
+  # ==========================================
+  db-shard-1:
+    image: mysql:8.4
+    container_name: mysql_shard_1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: restaurant_shard_1
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_shard_1_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+    networks:
+      - nest_multiple_restaurant_net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p$$MYSQL_ROOT_PASSWORD",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ==========================================
+  # DB SHARD 2
+  # ==========================================
+  db-shard-2:
+    image: mysql:8.4
+    container_name: mysql_shard_2
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: restaurant_shard_2
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_shard_2_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+    networks:
+      - nest_multiple_restaurant_net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p$$MYSQL_ROOT_PASSWORD",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ==========================================
+  # REDIS (Fast-Fail & Global State)
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: my_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - nest_multiple_restaurant_net
+
+  # ==========================================
+  # REDIS INIT SEEDER (Tự động nạp Stock khi docker up)
+  # ==========================================
+  redis-init:
+    image: redis:7-alpine
+    container_name: my_redis_init
+    depends_on:
+      - redis
+    networks:
+      - nest_multiple_restaurant_net
+    command: >
+      sh -c "
+        echo 'Chờ Redis khởi động...';
+        sleep 2;
+        echo 'Đang khởi tạo Redis Keys cho 3 Shards...';
+        redis-cli -h redis SET stock:shard_0:restaurant_1:item_500 1000;
+        redis-cli -h redis SET stock:shard_1:restaurant_1:item_500 1000;
+        redis-cli -h redis SET stock:shard_2:restaurant_1:item_500 1000;
+        redis-cli -h redis DEL soldout:1:500;
+        echo '✅ Nạp Redis Stock thành công!';
+      "
+
+  # ==========================================
+  # RABBITMQ (High Performance Queue / Pub-Sub)
+  # ==========================================
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: my_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672" # Cổng kết nối AMQP cho Node.js Producer/Consumer
+      - "15672:15672" # RabbitMQ Management Dashboard UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - nest_multiple_restaurant_net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql_shard_0_data:
+  mysql_shard_1_data:
+  mysql_shard_2_data:
+  rabbitmq_data: # Volume giữ dữ liệu tin nhắn khi Restart Container
+  mongo_data:
+
+networks:
+  nest_multiple_restaurant_net:
+    driver: bridge

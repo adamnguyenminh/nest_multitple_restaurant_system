@@ -1,184 +1,110 @@
 version: "3.8"
 
 services:
-  # --- Read Database ---
-  mongodb:
-    image: mongo:6.0
-    container_name: restaurant_mongo
-    restart: always
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: root
-    volumes:
-      - mongo_data:/data/db
-    networks:
-      - nest_multiple_restaurant_net
-
   # ==========================================
-  # DB SHARD 0
+  # 1. POSTGRESQL (Enable Logical Replication WAL)
   # ==========================================
-  db-shard-0:
-    image: mysql:8.4
-    container_name: mysql_shard_0
+  postgres:
+    image: postgres:16-alpine
+    container_name: order_postgres
     restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: restaurant_shard_0
     ports:
-      - "3306:3306"
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: order_db
+    # Bật Logical Replication cho CDC Debezium qua command flags
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=4"
+      - "-c"
+      - "max_replication_slots=4"
     volumes:
-      - mysql_shard_0_data:/var/lib/mysql
-      - ./mysql/init:/docker-entrypoint-initdb.d
+      - postgres_data:/var/lib/postgresql/data
     networks:
-      - nest_multiple_restaurant_net
+      - cdc_net
     healthcheck:
-      test:
-        [
-          "CMD",
-          "mysqladmin",
-          "ping",
-          "-h",
-          "localhost",
-          "-u",
-          "root",
-          "-p$$MYSQL_ROOT_PASSWORD",
-        ]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 5
 
   # ==========================================
-  # DB SHARD 1
+  # 2. APACHE KAFKA (KRaft mode - Non Zookeeper)
   # ==========================================
-  db-shard-1:
-    image: mysql:8.4
-    container_name: mysql_shard_1
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: cdc_kafka
     restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: restaurant_shard_1
     ports:
-      - "3307:3306"
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
     volumes:
-      - mysql_shard_1_data:/var/lib/mysql
-      - ./mysql/init:/docker-entrypoint-initdb.d
+      - kafka_data:/var/lib/kafka/data
     networks:
-      - nest_multiple_restaurant_net
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "mysqladmin",
-          "ping",
-          "-h",
-          "localhost",
-          "-u",
-          "root",
-          "-p$$MYSQL_ROOT_PASSWORD",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      - cdc_net
 
   # ==========================================
-  # DB SHARD 2
+  # 3. DEBEZIUM CONNECT ENGINE
   # ==========================================
-  db-shard-2:
-    image: mysql:8.4
-    container_name: mysql_shard_2
+  debezium:
+    image: debezium/connect:2.5
+    container_name: cdc_debezium
     restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: restaurant_shard_2
     ports:
-      - "3308:3306"
-    volumes:
-      - mysql_shard_2_data:/var/lib/mysql
-      - ./mysql/init:/docker-entrypoint-initdb.d
+      - "8083:8083" # REST API to register connectors
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
     networks:
-      - nest_multiple_restaurant_net
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "mysqladmin",
-          "ping",
-          "-h",
-          "localhost",
-          "-u",
-          "root",
-          "-p$$MYSQL_ROOT_PASSWORD",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      - cdc_net
 
   # ==========================================
-  # REDIS (Fast-Fail & Global State)
+  # 4. REDIS (For Cache & Idempotency Check)
   # ==========================================
   redis:
     image: redis:7-alpine
-    container_name: my_redis
+    container_name: cdc_redis
     restart: unless-stopped
     ports:
       - "6379:6379"
     networks:
-      - nest_multiple_restaurant_net
-
-  # ==========================================
-  # REDIS INIT SEEDER (Tự động nạp Stock khi docker up)
-  # ==========================================
-  redis-init:
-    image: redis:7-alpine
-    container_name: my_redis_init
-    depends_on:
-      - redis
-    networks:
-      - nest_multiple_restaurant_net
-    command: >
-      sh -c "
-        echo 'Chờ Redis khởi động...';
-        sleep 2;
-        echo 'Đang khởi tạo Redis Keys cho 3 Shards...';
-        redis-cli -h redis SET stock:shard_0:restaurant_1:item_500 1000;
-        redis-cli -h redis SET stock:shard_1:restaurant_1:item_500 1000;
-        redis-cli -h redis SET stock:shard_2:restaurant_1:item_500 1000;
-        redis-cli -h redis DEL soldout:1:500;
-        echo '✅ Nạp Redis Stock thành công!';
-      "
-
-  # ==========================================
-  # RABBITMQ (High Performance Queue / Pub-Sub)
-  # ==========================================
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    container_name: my_rabbitmq
-    restart: unless-stopped
-    ports:
-      - "5672:5672" # Cổng kết nối AMQP cho Node.js Producer/Consumer
-      - "15672:15672" # RabbitMQ Management Dashboard UI
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    networks:
-      - nest_multiple_restaurant_net
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      - cdc_net
 
 volumes:
-  mysql_shard_0_data:
-  mysql_shard_1_data:
-  mysql_shard_2_data:
-  rabbitmq_data: # Volume giữ dữ liệu tin nhắn khi Restart Container
-  mongo_data:
+  postgres_data:
+  kafka_data:
 
 networks:
-  nest_multiple_restaurant_net:
+  cdc_net:
     driver: bridge

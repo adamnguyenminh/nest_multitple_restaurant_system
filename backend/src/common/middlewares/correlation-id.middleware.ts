@@ -14,6 +14,8 @@ export class CorrelationIdMiddleware implements NestMiddleware {
     req.headers['x-correlation-id'] = correlationId;
     res.setHeader('X-Correlation-Id', correlationId);
 
+    console.log(req.body);
+
     console.log(
       `[Middleware] [${correlationId}] Incoming Request: ${req.method} ${req.url}`,
     );
