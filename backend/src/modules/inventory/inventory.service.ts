@@ -28,21 +28,15 @@ export class InventoryService {
         `[STOCK DEDUCTION] Product: ${item.productId} | Qty: -${item.quantity}`,
       );
 
-      await this.inventoryRepo
-        .createQueryBuilder()
-        .insert()
-        .into(InventoryEntity)
-        .values({
-          productId: item.productId,
-          stock: 1000 - item.quantity, // Khởi tạo kho nếu chưa có bản ghi
-        })
-        .orUpdate(
-          ['stock'], // Các cột cần UPDATE khi bị trùng PK (product_id)
-          ['product_id'], // Cột PK/Unique constraint gây ra conflict
-        )
-        // Dùng Cú pháp PostgreSQL Native để trừ trực tiếp stock hiện tại
-        .setParameter('qty', item.quantity)
-        .execute();
+      await this.inventoryRepo.query(
+        `
+      INSERT INTO inventories (product_id, stock, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (product_id)
+      DO UPDATE SET stock = inventories.stock - $3, updated_at = NOW()
+      `,
+        [item.productId, 1000 - item.quantity, item.quantity],
+      );
     }
   }
 }
