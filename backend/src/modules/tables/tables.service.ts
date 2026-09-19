@@ -1,124 +1,102 @@
-import {
-  Injectable,
-  Inject,
-  NotFoundException,
-  ConflictException,
-} from '@nestjs/common';
-import { ClientProxy } from '@nestjs/microservices';
-import { ShardRouterService } from '../../core/database/shard_router.service';
+import { Injectable } from '@nestjs/common';
+import { Transactional, TransactionHost } from '@nestjs-cls/transactional'; // Dùng ALS Decorator
+import { TransactionalAdapterTypeOrm } from '@nestjs-cls/transactional-adapter-typeorm';
 import { Table, TableStatus } from './entities/table.entity';
-import { CreateReserveDto } from './dto/reserve_table.dto';
-import { TableRepository } from './table.repository';
-import { UpdateTableDto } from './dto/update_table.dto';
+import { OutboxEntity } from '../orders/entities/outbox.entity';
+import { ITableActivities } from './table-activities.interface';
 
 @Injectable()
-export class TablesService {
+export class TablesService implements ITableActivities {
   constructor(
-    private tableRepository: TableRepository,
-    private readonly shardRouterService: ShardRouterService,
-    @Inject('TABLE_EVENT_SERVICE') private readonly rabbitmqClient: ClientProxy,
+    // 1. Inject TransactionHost thay vì @InjectRepository
+    private readonly txHost: TransactionHost<TransactionalAdapterTypeOrm>,
   ) {}
 
-  async reserveAnyTable(CreateReserveDto: CreateReserveDto) {
-    const dataSource = this.shardRouterService.getDataSourceByShardId(0);
-    const queryRunner = dataSource.createQueryRunner();
+  // ACTIVITY 1: Đặt bàn (Code của bạn đã qua refactor)
+  @Transactional() // ALS tự động quản lý Transaction
+  async reserveTableActivity(createReserveDto: any) {
+    // 2. Lấy Transactional Repository từ txHost (Bảo đảm 100% nằm trong Transaction)
+    const txTableRepo = this.txHost.tx.getRepository(Table);
+    const txOutboxRepo = this.txHost.tx.getRepository(OutboxEntity);
 
-    await queryRunner.connect();
-    await queryRunner.startTransaction('READ COMMITTED');
+    const capacity = createReserveDto.capacity || 2;
 
-    try {
-      let capacity = CreateReserveDto.capacity || 2;
-      // 1. Khóa và lấy ra 1 bàn AVAILABLE phù hợp gần nhất
-      // MYSQL FOR UPDATE SKIP LOCKED sẽ bỏ qua các bàn đang bị Lock bởi Transaction khác
-      const table = await queryRunner.manager
-        .createQueryBuilder(Table, 'table')
-        .setLock('pessimistic_read')
-        .setOnLocked('skip_locked')
-        .where('table.restaurant_id = :restaurant_id', { restaurant_id: 1 })
-        .where('table.capacity >= :min_capacity', {
-          min_capacity: capacity,
-        })
-        .where('table.capacity <= :max_capacity', {
-          max_capacity: capacity + 2,
-        })
-        .andWhere('table.status = :status', { status: TableStatus.AVAILABLE })
-        .orderBy('table.capacity', 'ASC')
-        .getOne();
+    // 3. Sử dụng txTableRepo để tạo QueryBuilder
+    const table = await txTableRepo
+      .createQueryBuilder('table')
+      .setLock('pessimistic_write') // Bây giờ setLock sẽ hoạt động hoàn hảo
+      .setOnLocked('skip_locked')
+      .where('table.restaurant_id = :restaurant_id', { restaurant_id: 1 })
+      .andWhere('table.capacity >= :min_capacity', { min_capacity: capacity })
+      .andWhere('table.capacity <= :max_capacity', {
+        max_capacity: capacity + 2,
+      })
+      .andWhere('table.status = :status', { status: TableStatus.AVAILABLE })
+      .orderBy('table.capacity', 'ASC')
+      .getOne();
 
-      if (!table) {
-        throw new ConflictException('Không còn bàn trống phù hợp!');
-      }
+    if (!table) {
+      return { success: false, message: 'Không còn bàn trống phù hợp!' };
+    }
 
-      // 2. Cập nhật trạng thái
-      table.status = TableStatus.RESERVED;
-      await queryRunner.manager.save(table);
+    // Cập nhật status sang RESERVED
+    table.status = TableStatus.RESERVED;
+    await txTableRepo.save(table);
 
-      // Commit transaction
-      await queryRunner.commitTransaction();
+    // Lưu Outbox Event
+    const outboxId = crypto.randomUUID();
+    const outboxMessage = txOutboxRepo.create({
+      id: outboxId,
+      aggregateType: 'TABLE',
+      aggregateId: table.id.toString(),
+      eventType: 'TABLE_RESERVED',
+      payload: {
+        id: outboxId,
+        tableId: table.id,
+        code: table.code,
+        status: table.status,
+        timestamp: new Date(),
+      },
+    });
+    await txOutboxRepo.save(outboxMessage);
 
-      // 3. Bắn Event vào RabbitMQ (Async notification)
-      const eventPayload = {
-        restaurant_id: table.restaurantId,
-        table: {
-          eventId: Date.now(),
+    return { success: true, data: table };
+  }
+
+  // ACTIVITY 2: Nhả bàn về AVAILABLE sau 2 phút
+  @Transactional()
+  async releaseTableActivity(tableId: number) {
+    const txTableRepo = this.txHost.tx.getRepository(Table);
+    const txOutboxRepo = this.txHost.tx.getRepository(OutboxEntity);
+
+    const table = await txTableRepo
+      .createQueryBuilder('table')
+      .setLock('pessimistic_write')
+      .where('table.id = :id', { id: tableId })
+      .getOne();
+
+    // Chỉ nhả bàn nếu status vẫn đang là RESERVED (chưa chuyển sang OCCUPIED/CHECKED_IN)
+    if (table && table.status === TableStatus.RESERVED) {
+      table.status = TableStatus.AVAILABLE;
+      await txTableRepo.save(table);
+
+      // Ghi Outbox Event báo bàn đã ngả về AVAILABLE (CDC Debezium sẽ stream đi)
+      const outboxId = crypto.randomUUID();
+      const outboxMessage = txOutboxRepo.create({
+        id: outboxId,
+        aggregateType: 'TABLE',
+        aggregateId: table.id.toString(),
+        eventType: 'TABLE_AUTO_RELEASED',
+        payload: {
+          id: outboxId,
           tableId: table.id,
           code: table.code,
           status: table.status,
-          customerName: CreateReserveDto.customerName ?? 'Guest',
+          reason: 'EXPIRED_2_MINUTES',
           timestamp: new Date(),
         },
-      };
-
-      this.rabbitmqClient.emit('table_status_changed', eventPayload);
-
-      return {
-        success: true,
-        message: `Đặt bàn thành công! Mã bàn: ${table.code}`,
-        data: table,
-      };
-    } catch (err) {
-      await queryRunner.rollbackTransaction();
-      throw err;
-    } finally {
-      await queryRunner.release();
-    }
-  }
-
-  /**
-   * Cập nhật trạng thái bàn thủ công (SEATED, CLEANING, AVAILABLE)
-   */
-  async updateStatus(tableId: number, updateTableDto: UpdateTableDto) {
-    try {
-      const table = await this.findOne(tableId);
-      if (!table) throw new NotFoundException('Không tìm thấy bàn!');
-
-      table.status = updateTableDto.status;
-      const updatedTable = await this.tableRepository.save(table);
-
-      // Bắn Event
-      this.rabbitmqClient.emit('table_status_changed', {
-        eventId: Date.now(),
-        tableId: updatedTable.id,
-        code: updatedTable.code,
-        status: updatedTable.status,
-        timestamp: new Date(),
       });
-
-      return updatedTable;
-    } catch (err) {
-      console.error(err);
+      await txOutboxRepo.save(outboxMessage);
     }
-  }
-
-  findAll(): Promise<Table[]> {
-    return this.tableRepository.find();
-  }
-
-  findOne(id: number): Promise<Table | null> {
-    return this.tableRepository.findOneBy({ id });
-  }
-
-  async remove(id: number): Promise<void> {
-    await this.tableRepository.delete(id);
   }
 }

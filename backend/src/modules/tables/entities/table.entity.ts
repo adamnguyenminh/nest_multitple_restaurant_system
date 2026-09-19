@@ -15,9 +15,7 @@ export enum TableStatus {
   CLEANING = 'CLEANING',
 }
 
-@Entity('restaurant_table', {
-  synchronize: false, // Loại trừ bảng này khỏi quá trình Auto-Sync của TypeORM
-})
+@Entity('restaurant_tables')
 @Index('idx_restaurant_table', [
   'restaurantId',
   'capacity',

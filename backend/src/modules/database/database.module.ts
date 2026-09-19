@@ -7,6 +7,7 @@ import { OrderEntity } from '../orders/entities/order.entity';
 import { OutboxEntity } from '../orders/entities/outbox.entity';
 import { InventoryEntity } from '../inventory/entities/inventory.entity';
 import { ProcessedEventEntity } from '../inventory/entities/processed-event.entity';
+import { Table } from '../tables/entities/table.entity';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ProcessedEventEntity } from '../inventory/entities/processed-event.enti
         OutboxEntity,
         InventoryEntity,
         ProcessedEventEntity,
+        Table,
       ],
       synchronize: true,
       logging: false,

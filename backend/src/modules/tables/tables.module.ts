@@ -1,30 +1,35 @@
 import { Module } from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import { getDataSourceToken } from '@nestjs/typeorm';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { Connection, Client } from '@temporalio/client';
 import { TablesController } from './tables.controller';
 import { TablesService } from './tables.service';
-import { ShardRouterService } from '../../core/database/shard_router.service';
 import { EntityRegistry } from '../../core/database/entity_registry.service';
 import { Table } from './entities/table.entity';
-import { TableRepository } from './table.repository';
-import { SHARD_CONNECTIONS } from '../../core/database/database.constants';
-import { JwtModule } from '@nestjs/jwt';
+import { OutboxEntity } from '../orders/entities/outbox.entity';
+import { TableActivities } from './table.activities';
+import { TemporalWorkerService } from './temporal-worker.service';
+
+export const TEMPORAL_CLIENT = 'TEMPORAL_CLIENT';
 
 // Module tự đăng ký Table entity vào Registry
 EntityRegistry.register([Table]);
 
 @Module({
-  imports: [JwtModule],
+  imports: [TypeOrmModule.forFeature([Table, OutboxEntity])],
   controllers: [TablesController],
   providers: [
     TablesService,
-    ShardRouterService,
+    TableActivities,
+    TemporalWorkerService,
     {
-      provide: TableRepository,
-      useFactory: (dataSource: DataSource) => new TableRepository(dataSource),
-      inject: [getDataSourceToken(SHARD_CONNECTIONS.SHARD_0)], // Ràng buộc chính xác SHARD_0
+      provide: TEMPORAL_CLIENT,
+      useFactory: async () => {
+        const connection = await Connection.connect({
+          address: 'localhost:7233',
+        });
+        return new Client({ connection });
+      },
     },
   ],
-  exports: [TableRepository],
 })
 export class TablesModule {}

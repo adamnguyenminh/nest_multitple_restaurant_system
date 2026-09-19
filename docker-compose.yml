@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   # ==========================================
-  # 1. POSTGRESQL (Enable Logical Replication WAL)
+  # 1. POSTGRESQL
   # ==========================================
   postgres:
     image: postgres:16-alpine
@@ -14,7 +14,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: secret
       POSTGRES_DB: order_db
-    # Bật Logical Replication cho CDC Debezium qua command flags
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
     command:
       - "postgres"
       - "-c"
@@ -25,13 +25,14 @@ services:
       - "max_replication_slots=4"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - cdc_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", "pg_isready -U postgres -d order_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
 
   # ==========================================
   # 2. APACHE KAFKA (KRaft mode - Non Zookeeper)
@@ -58,6 +59,7 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
       CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     volumes:
       - kafka_data:/var/lib/kafka/data
     networks:
@@ -71,7 +73,7 @@ services:
     container_name: cdc_debezium
     restart: unless-stopped
     ports:
-      - "8083:8083" # REST API to register connectors
+      - "8083:8083"
     environment:
       BOOTSTRAP_SERVERS: kafka:29092
       GROUP_ID: 1
@@ -90,7 +92,7 @@ services:
       - cdc_net
 
   # ==========================================
-  # 4. REDIS (For Cache & Idempotency Check)
+  # 4. REDIS
   # ==========================================
   redis:
     image: redis:7-alpine
@@ -98,6 +100,47 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    networks:
+      - cdc_net
+
+  # ==========================================
+  # 5. TEMPORAL SERVER
+  # ==========================================
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    container_name: cdc_temporal
+    restart: unless-stopped
+    ports:
+      - "7233:7233"
+    environment:
+      - DB=postgres12_pgx
+      - DB_PORT=5432
+      - POSTGRES_SEEDS=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PWD=secret # <-- SỬA TẠI ĐÂY (bắt buộc là POSTGRES_PWD)
+      - POSTGRES_DB=temporal
+      - POSTGRES_VISIBILITY_DB=temporal_visibility
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cdc_net
+
+  # ==========================================
+  # 6. TEMPORAL WEB UI (Port 8233)
+  # ==========================================
+  temporal-ui:
+    image: temporalio/ui:2.28.0
+    container_name: cdc_temporal_ui
+    restart: unless-stopped
+    ports:
+      - "8233:8080" # Web UI tại http://localhost:8233
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_UI_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8233
+    depends_on:
+      - temporal
     networks:
       - cdc_net
 
