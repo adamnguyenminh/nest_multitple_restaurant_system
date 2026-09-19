@@ -450,3 +450,127 @@ export function reservationWorkflow(reservationId: string): void {
 - Quy trình kéo dài nhiều ngày (như nhắc nhở trước 7 ngày, gửi thông báo sau 14 ngày, đòi nợ định kỳ theo kỳ hạn).
 - Nghiệp vụ phức tạp có nhiều nhánh rẽ (ví dụ: Đợi 30 phút -> Nếu chưa checkin thì gửi SMS -> Đợi tiếp 24h nếu vẫn không có phản hồi thì tự động hoàn tiền/hủy đơn).
 - Cần kiểm vết Audit Trail chính xác 100% cho mọi hành động xảy ra trong suốt tuần.
+
+# Nghiên cứu thêm
+
+Để hiểu vì sao Temporal có thể đóng băng Workflow mà hoàn toàn không tốn 0% RAM hay CPU của Worker Node trong suốt 7 ngày hay cả vài năm, chúng ta cần đi sâu vào cơ chế kiến trúc nội tại của Temporal: Event Sourcing, Separation of Execution & State, và Workflow Replay Engine.
+
+## 1. Nguyên lý Kiến trúc: Chia tách Worker và Temporal Server (State vs. Execution)
+
+Nhiều hệ thống lập trình truyền thống (hoặc thư viện Job Queue như BullMQ) duy trì trạng thái chờ bằng một trong hai cách:
+
+- In-Memory Timer (setTimeout): Giữ Process/Thread ở trạng thái sleep. Thread này liên tục chiếm dụng bộ nhớ RAM để giữ Stack Trace và tốn CPU Context Switching.
+- Polling (setInterval / Redis ZSET): Worker hoặc Redis Cron liên tục thực hiện truy vấn DB/Redis định kỳ để xem có Job nào đến hạn chưa.
+
+**Temporal tiếp cận hoàn toàn khác nhờ phân tách hai tầng độc lập:**
+
+```Bash
+┌────────────────────────────────────────────────────────┐
+ │                   TEMPORAL CLUSTER                     │
+ │  (State Store - Lưu trữ History & Timers vào DB Disk)   │
+ └──────────────────────────┬─────────────────────────────┘
+                            │ (gRPC Event Push khi hết giờ)
+                            ▼
+ ┌────────────────────────────────────────────────────────┐
+ │                    WORKER NODE                         │
+ │     (Stateless Execution Engine - Chạy code TypeScript)│
+ └────────────────────────────────────────────────────────┘
+```
+
+- Temporal Cluster (Server): Đảm nhiệm việc quản lý Trạng thái (State), Thời gian (Timer) và Lưu trữ (History Persistence Engine).
+- Worker Node (Code NestJS của bạn): Là một Node Stateless (không giữ trạng thái). Nó chỉ đơn thuần là cỗ máy tính toán nhận các chỉ thị (Tasks) từ Temporal Server qua kết nối gRPC, thực thi rồi trả kết quả.
+
+## 2. Chuyện gì xảy ra dưới nền tảng (Under the Hood) khi dòng await sleep('7 days') chạy?
+
+```Bash
+Hãy theo dõi chính xác chuỗi sự kiện diễn ra từng bước (Step-by-step):
+
+[Worker Node]                                       [Temporal Server & DB]
+      │                                                       │
+      ├─── 1. Chạy tới `await sleep('7 days')`                │
+      │                                                       │
+      ├─── 2. Bắn gRPC Command: CreateTimer(7 days) ─────────►│
+      │                                                       │ 3. Ghi Event `TimerStarted`
+      │                                                       │    vào DB Disk (Postgres/Cassandra)
+      │◄── 4. Nhận ACK thành công ────────────────────────────┤
+      │                                                       │ 5. Đặt hẹn giờ trong
+      │                                                       │    Distributed Timer Service
+      │
+      ▼
+6. GARBAGE COLLECTION!
+   - Xóa Workflow Instance khỏi RAM
+   - Giải phóng Event Loop & CPU Thread
+   (RAM = 0 MB, CPU = 0%)
+                                                              │
+                                                        ... 7 NGÀY SAU ...
+                                                              │
+                                                              │ 8. Timer bùng nổ (Fire)!
+                                                              │    Ghi Event `TimerFired` vào DB
+      │◄── 9. Server đẩy Task khôi phục sang Worker ──────────┤
+      │
+ 10. REPLAY ENGINE:
+     - Worker nạp lại Event History từ DB
+     - Chạy lại nhanh (Replay) qua dòng `sleep`
+     - Chạy tiếp code phía sau `sleep`
+```
+
+**Bước 1: Yêu cầu tạo Timer (Timer Delegation)**
+
+Khi câu lệnh await sleep('7 days') được gọi trong mã TypeScript của Worker:
+
+- Worker không gọi hàm setTimeout() của Node.js.
+- SDK của Temporal sẽ intercepts lệnh này và gửi một request gRPC dạng: ScheduleDecision: StartTimer(duration: 7 days) lên Temporal Server.
+
+**Bước 2: Temporal Server lưu vết xuống đĩa cứng (Persistence)**
+
+Temporal Server nhận request và thực hiện 2 thao tác:
+
+- Ghi thêm một sự kiện mới TimerStarted vào lịch sử giao dịch (Event History) của Workflow đó nằm trong cơ sở dữ liệu đĩa cứng (PostgreSQL / Cassandra / MySQL).
+- Đăng ký mốc thời gian hết hạn (ExpirationTime = Now + 7 days) vào Distributed Timer Service của Server (sử dụng cấu trúc dữ liệu Time-Wheel hoặc Sorted Index trên DB Disk).
+
+**Bước 3: Worker tiến hành Garbage Collection (Xóa hoàn toàn khỏi RAM)**
+
+Ngay khi Temporal Server gửi phản hồi xác nhận (ACK) rằng sự kiện TimerStarted đã được ghi vào DB an toàn:
+
+- Worker Node tiến hành tiêu hủy (Evict) đối tượng Workflow Instance khỏi Bộ nhớ RAM.
+- Bộ dọn rác (Garbage Collector của V8/Node.js) giải phóng toàn bộ Variables, Closure, Stack Frame liên quan đến Workflow đó.
+- Kết quả: Trên Worker Node, Workflow đó không còn bất kỳ một byte RAM nào tồn tại. Thread CPU hoàn toàn tự do để phục vụ các Request/Tasks khác.
+
+## 3. Sau 7 ngày, làm sao Worker biết để chạy tiếp? (Cơ chế Replay & Event Sourcing)
+
+Sau đúng 7 ngày (168 giờ):
+
+**Server kích hoạt Event:**
+
+- Distributed Timer Service của Temporal Server phát hiện đến giờ hẹn. Server ghi thêm một event mới là TimerFired vào Event History trong DB.
+
+**Server đẩy Task xuống Worker:**
+
+- Temporal Server tạo một WorkflowTask và đẩy qua gRPC tới Worker đang rảnh rỗi.
+
+**Cơ chế Workflow Replay (Chạy phục hồi trạng thái):**
+
+- Worker nhận được Task kèm theo Toàn bộ Lịch sử Sự kiện (Event History) của Workflow từ Server.
+- Worker khởi tạo lại một Workflow Instance sạch trên RAM và bắt đầu chạy lại (Replay) từ dòng code đầu tiên.
+- Phép thuật Replay xảy ra tại đây:
+  - Khi code Replay chạy đến dòng await sleep('7 days'), SDK kiểm tra Event History và thấy: "À, đã có event TimerFired tương ứng trong History rồi!"
+  - SDK lập tức trả về kết quả thành công cho hàm sleep mà không block code một milli-giây nào nữa.
+- Mã lệnh lập tức vượt qua dòng await sleep('7 days') và nhảy thẳng xuống dòng tiếp theo (ví dụ: sendReminderEmail()).
+
+## 4. So sánh Mô hình Bộ nhớ (Memory Profile) giữa BullMQ và Temporal.io
+
+| Tiêu chí                                         | BullMQ (Redis)                                              | Temporal.io                                                                                 |
+| :----------------------------------------------- | :---------------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| **Bản chất bộ nhớ**                              | RAM-bound (Lưu trên Memory của Redis)                       | Disk-bound (Lưu trên Ổ đĩa cứng DB của Cluster)                                             |
+| **RAM tiêu tốn cho 1,000,000 Jobs "ngủ" 7 ngày** | ~500 MB - 2 GB RAM (Redis Hash + ZSET metadata cho 1M keys) | 0 MB RAM trên Worker Node. 0 MB RAM trên Temporal Server (chỉ tốn dung lượng đĩa cứng DB)   |
+| **Xử lý khi Worker Restart**                     | Cần Worker duy trì Poller để check ZSET                     | Worker vô tư restart, crash, scale up/down. Trạng thái Workflow được Replay lại nguyên vẹn. |
+| **Giới hạn số lượng Timer hoãn**                 | Bị giới hạn bởi dung lượng RAM của Redis Server.            | Bị giới hạn bởi dung lượng đĩa cứng (Disk Storage - rẻ hơn RAM hàng chục lần).              |
+
+## 5. Tóm lại
+
+Temporal khẳng định tốn 0% RAM/CPU trong thời gian hoãn vì:
+
+- Không giữ Thread/Process ở trạng thái treo (sleep).
+- Ủy quyền toàn bộ việc đếm giờ (Timer Management) cho Temporal Server lưu trữ dưới đĩa cứng DB.
+- Giải phóng hoàn toàn (Evict) Workflow khỏi bộ nhớ RAM của Worker Node ngay sau khi đăng ký Timer thành công.
+- Sử dụng cơ chế Event Sourcing Replay để dựng lại trạng thái code khi đếm giờ kết thúc.
