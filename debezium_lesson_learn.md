@@ -122,3 +122,213 @@ Mặc dù Debezium kết hợp với Change Data Capture (CDC) là một giải 
 - Hệ thống Enterprise, Ecommerce High-Traffic, Fintech / Core Banking đòi hỏi tính nhất quán dữ liệu tuyệt đối (Zero Data Loss) và độ trễ Real-time (< 10-50ms).
 - Cần đồng bộ dữ liệu Real-time từ DB chính sang ElasticSearch, Redis Cache, Data Warehouse mà không muốn ảnh hưởng hiệu năng DB chính.
 - Đã có sẵn hạ tầng Kafka và đội ngũ DevOps đủ năng lực kiểm soát monitoring/alerting.
+
+## 8. Cách khắc phục các nhược điểm
+
+Để giải quyết triệt để các nhược điểm và rủi ro vận hành của CDC Debezium mà vẫn giữ nguyên được hiệu năng Real-time vượt trội, bạn cần xây dựng một "Lưới an toàn" (Safety Net) cho hạ tầng của mình.
+
+Dưới đây là Giải pháp chuẩn Kiến trúc Enterprise (Production-Ready Architecture) giúp triệt hạ từng nhược điểm cụ thể:
+
+### 1. Triệt hạ rủi ro "Tràn ổ cứng Database" (WAL/Binlog Bloat)
+
+Đây là nguy cơ nguy hiểm nhất khi Debezium bị ngắt kết nối khiến Database giữ lại file log cho đến khi cạn ổ đĩa.
+
+- Giải pháp 1: Thiết lập Giới hạn Cứng cho Replication Slot (WAL Keeper):
+  Trên PostgreSQL 13+, bạn cài đặt tham số max_slot_wal_keep_size trong file postgresql.conf.
+
+```Ini, TOML
+# Nếu Debezium bị lag vượt quá 20GB WAL, Postgres sẽ tự động ngắt Slot
+# để bảo vệ đĩa cứng không bị tràn (hy sinh CDC để cứu DB chính)
+max_slot_wal_keep_size = 20GB
+```
+
+- Giải pháp 2: Tự động hóa Script "Safe Purging" kiểm tra Lag trước khi xóa Data:
+  Tuyệt đối không xóa/drop partition bảng Outbox theo thời gian cố định. Luôn tạo Stored Procedure kiểm tra chỉ số lag_bytes trước khi thực thi lệnh dọn dẹp:
+
+```SQL
+-- Nếu replication lag < 10MB mới cho phép dọn dẹp dữ liệu Outbox
+IF (SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)
+    FROM pg_replication_slots WHERE slot_name = 'debezium_slot') < 10485760 THEN
+
+    -- Tiến hành Drop Partition hoặc Delete dữ liệu cũ
+    DELETE FROM outbox_messages WHERE created_at < NOW() - INTERVAL '3 days';
+END IF;
+```
+
+### 2. Triệt hạ nhược điểm "Gửi trùng Event" (At-Least-Once Delivery)
+
+Do Debezium đảm bảo dữ liệu không bị mất nên đôi khi sẽ gửi lặp lại Message nếu bị Restart giữa chừng.
+
+- Giải pháp: Chuẩn hóa Idempotent Consumer ở phía ứng dụng nhận (Consumer Service):
+  Áp dụng Idempotent Interceptor / Decorator kết hợp với bảng processed_events nằm chung Transaction với logic nghiệp vụ:
+  - Kiểm tra nhanh (SELECT 1 FROM processed_events WHERE event_id = ...) trước khi xử lý.
+  - Lưu event_id và consumer_group vào DB trong cùng một DB Transaction chứa logic xử lý (ví dụ: trừ kho).
+  - Đặt Composite Unique Key (event_id, consumer_group) ở cấp DB để chống Race Condition khi Scale Out nhiều Instance.
+
+### 3. Giải quyết bài toán "Initial Snapshot" gây nặng Database
+
+Khi thêm Connector mới vào Database lớn, Debezium phải scan lại toàn bộ bảng để đồng bộ ban đầu gây Lock/Tải CPU cao.
+
+- Giải pháp 1: Sử dụng Incremental Snapshot (Chỉ có ở Debezium):
+  Thay vì quét 1 lần từ đầu tới cuối, Debezium hỗ trợ cơ chế quét theo từng trang (Chunk-based) thông qua Signal Table.
+  - Tạo một bảng Signal đơn giản:
+
+  ```SQL
+  CREATE TABLE debezium_signal (id VARCHAR(64) PRIMARY KEY, type VARCHAR(32), data VARCHAR(2048));
+  ```
+
+  - Gửi Signal yêu cầu Debezium Snapshot theo từng khoảng ID mà không khóa bảng (Lock-free):
+
+  ```SQL
+  INSERT INTO debezium_signal VALUES('ad-hoc-1', 'execute-snapshot', '{"data-collections": ["public.outbox_messages"],"type": "incremental"}');
+  ```
+
+- Giải pháp 2: Chỉ cho phép Read từ Read-Replica DB:
+
+Do Debezium đảm bảo dữ liệu không bị mất nên đôi khi sẽ gửi lặp lại Message nếu bị Restart giữa chừng.
+
+- Giải pháp: Chuẩn hóa Idempotent Consumer ở phía ứng dụng nhận (Consumer Service):
+  Áp dụng Idempotent Interceptor / Decorator kết hợp với bảng processed_events nằm chung Transaction với logic nghiệp vụ:
+  - Kiểm tra nhanh (SELECT 1 FROM processed_events WHERE event_id = ...) trước khi xử lý.
+  - Lưu event_id và consumer_group vào DB trong cùng một DB Transaction chứa logic xử lý (ví dụ: trừ kho).
+  - Đặt Composite Unique Key (event_id, consumer_group) ở cấp DB để chống Race Condition khi Scale Out nhiều Instance.
+
+### 4. Triệt hạ "Độ phức tạp vận hành" (Operational Complexity)
+
+Rào cản lớn nhất của Debezium là cụm hạ tầng cồng kềnh: Kafka + Zookeeper + Kafka Connect.
+
+- Giải pháp 1: Đơn giản hóa Cluster với Kafka KRaft Mode:
+  Loại bỏ hoàn toàn Zookeeper. Sử dụng Kafka ở chế độ KRaft (Kafka Raft Metadata) giúp hạ tầng gọn hơn 50%.
+- Giải pháp 2: Dùng Debezium Server (Lightweight Standalone Alternative):
+  Nếu không muốn dựng cụm Kafka Connect khổng lồ, bạn có thể triển khai Debezium Server (một ứng dụng Java/Quarkus siêu nhẹ).
+  - Debezium Server đọc trực tiếp WAL/Binlog từ Database và đẩy thẳng sự kiện sang các Message Broker đơn giản hơn như RabbitMQ, Redis Streams, AWS Kinesis, NATS, GCP PubSub mà không bắt buộc dùng Apache Kafka.
+
+### 5. Xử lý "Schema Drift" (Khi thay đổi cấu trúc Bảng/DDL)
+
+Khi ALTER TABLE đụng đến các cột, Debezium Connector có thể bị crash.
+
+- Giải pháp: Sử dụng Pattern Outbox chuẩn hóa (Schema-less Outbox Payload):
+  Thay vì để Debezium bắt sự kiện trực tiếp từ bảng nghiệp vụ (như orders, users), hãy bắt CDC từ duy nhất 1 Bảng Outbox chung.
+
+Cấu trúc Bảng Outbox cố định:
+
+```SQL
+CREATE TABLE outbox_messages (
+    id UUID PRIMARY KEY,
+    aggregate_type VARCHAR(255) NOT NULL, -- Ví dụ: 'ORDER'
+    event_type VARCHAR(255) NOT NULL,     -- Ví dụ: 'ORDER_CREATED'
+    payload JSONB NOT NULL,                -- Dữ liệu động dạng JSON
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+- Lợi ích: Cấu trúc bảng Outbox không bao giờ thay đổi (Không bao giờ DDL) dù nghiệp vụ thay đổi ra sao. Tất cả dữ liệu linh hoạt nằm trong cột JSONB payload. CDC Connector chạy năm này qua năm khác mà không lo crash vì Schema Drift.
+
+### 6. Bảng tóm tắt Bộ Giải Pháp (Playbook Vận Hành)
+
+| Nhược điểm Debezium                   | Giải pháp Triệt hạ (Solution)                                                |
+| :------------------------------------ | :--------------------------------------------------------------------------- |
+| **Tràn đĩa cứng (WAL/Binlog)**        | Cài đặt max_slot_wal_keep_size + Check lag_bytes trước khi dọn Outbox        |
+| **Gửi trùng Event (Duplicates)**      | Cài đặt Idempotent Interceptor + Bảng processed_events trong DB Transaction  |
+| **Initial Snapshot bị quá tải DB**    | Chạy Incremental Snapshot qua Signal Table hoặc kết nối qua Read-Replica.    |
+| **Hạ tầng cồng kềnh (Kafka/Connect)** | Chuyển sang Debezium Server để bắn thẳng Event sang RabbitMQ / Redis Streams |
+| **Schema Drift (ALTER TABLE lỗi)**    | Chỉ chạy CDC trên 1 Bảng Outbox cố định có cột JSONB payload                 |
+
+### 7. Cấu hình trong Debezium
+
+Dưới đây là cẩm nang chuyên sâu toàn diện về các nhóm cấu hình cốt lõi của Debezium Connector (đặc biệt cho PostgreSQL). Cẩm nang được phân loại chi tiết theo từng nhóm chức năng, kèm giải thích bản chất hạ tầng (Internal Mechanics) và kinh nghiệm thực chiến dành cho Newbie.
+
+**Nhóm 1: Kết nối & Định danh (Core Connection & Identification)**
+
+```JSON
+"connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+"tasks.max": "1",
+"topic.prefix": "cdc_order",
+"plugin.name": "pgoutput",
+"slot.name": "debezium_order_slot",
+"publication.name": "dbz_publication"
+```
+
+- **connector.class**: Chỉ định Class chịu trách nhiệm đọc WAL cho Postgres.
+- **tasks.max = "1"**: Với PostgreSQL Logical Replication, bắt buộc luôn luôn là 1. Postgres chỉ cho phép 1 Client duy nhất đọc từ 1 Replication Slot tại một thời điểm để đảm bảo thứ tự dữ liệu (Ordering Guarantee).
+- **topic.prefix**: Namespace đại diện cho cụm DB trong hệ sinh thái Kafka. Tất cả internal topic (như schema history, offsets) sẽ dùng prefix này.
+- **plugin.name = "pgoutput"**: Logical Decoding Plugin mặc định của PostgreSQL (từ v10+).
+  - Vì sao nên dùng: Không cần cài thêm extension C/C++ ngoài (như wal2json hay decoderbufs), giúp tránh rủi ro gây panic/crash cho Database Engine.
+- **slot.name**: Tên của Logical Replication Slot được tạo trên Postgres
+  - Kinh nghiệm: Nên đặt tên cố định (ví dụ: debezium_order_slot) để dễ theo dõi trong bảng pg_replication_slots của Postgres.
+- **publication.name**: Tên của Postgres Publication được Debezium tự tạo hoặc chỉ định sẵn (CREATE PUBLICATION).
+
+**Nhóm 2: Lọc dữ liệu (Data Filtering)**
+
+```JSON
+"table.include.list": "public.outbox_messages",
+"column.include.list": "public.outbox_messages.(id|aggregatetype|aggregateid|payload)",
+"tombstones.on.delete": "false"
+```
+
+- **table.include.list**: Danh sách các bảng cho phép Debezium đọc.
+  - Tác dụng: Giúp Debezium chỉ tập trung lắng nghe bảng outbox_messages. Tránh việc Debezium đọc toàn bộ WAL của các bảng khác (orders, users...), gây lãng phí CPU, RAM và I/O.
+- **column.include.list**: Bảng lọc cấp cột (Column-level Whitelist). Nếu bảng outbox có những cột rác/cột tạm, bạn dùng config này để chỉ gửi các cột cần thiết về Kafka.
+- **tombstones.on.delete = "false"**:
+  - Mặc định khi một dòng bị DELETE, Debezium sẽ gửi 2 message: một message chứa dữ liệu trước khi xóa, và một message null (Tombstone record) để dọn Kafka Compaction.
+  - Nếu ứng dụng của bạn không dùng Kafka Log Compaction, hãy đặt là false để tránh bắn ra các null message vô nghĩa làm crash Consumer.
+
+**Nhóm 3: Định tuyến & Chuyển đổi dữ liệu (Outbox EventRouter SMT)**
+
+Single Message Transform (SMT) giúp biến các CDC Event cồng kềnh (chứa metadata before, after, source...) thành các Domain Event gọn nhẹ.
+
+```JSON
+"transforms": "outbox",
+"transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+"transforms.outbox.route.topic.replacement": "events.${routedByValue}",
+"transforms.outbox.table.fields.additional.placement": "type:header:eventType",
+"transforms.outbox.id.column": "id",
+"transforms.outbox.aggregate.type.column": "aggregatetype",
+"transforms.outbox.aggregate.id.column": "aggregateid",
+"transforms.outbox.payload.attribute.column": "payload"
+```
+
+- **transforms & transforms.outbox.type**: Kích hoạt và khai báo class Plugin EventRouter.
+- **transforms.outbox.route.topic.replacement**: Định tuyến Topic động dựa trên giá trị của thuộc tính ${routedByValue}.
+- **transforms.outbox.aggregate.type.column**: Chỉ định cột trong DB làm nguồn lấy giá trị gán cho ${routedByValue}.
+  - Ví dụ: Cột aggregatetype có giá trị là "Order" $\rightarrow$ Message sẽ bắn vào Topic events.Order.
+- **transforms.outbox.table.fields.additional.placement**:
+  - Cú pháp: <tên*cột_in_db>:<vị_trí*đặt>:<tên_key>
+  - type:header:eventType: Đẩy dữ liệu cột type trong DB thành một Kafka Header mang tên eventType. Consumer có thể đọc Header này để routing hàm xử lý mà không cần parse JSON body.
+- **transforms.outbox.id.column / aggregate.id.column / payload.attribute.column**: Ghi đè (Override) tên cột trong Database tương ứng với thuộc tính chuẩn của Debezium Outbox.
+  - Vì sao Newbie thường dính lỗi ở đây: Các ORM như TypeORM tự động hạ tên cột thành dạng chữ thường (lowercase) aggregatetype thay vì aggregateType. Khai báo chính xác các thuộc tính này giúp tránh lỗi IllegalArgumentException: Could not find column....
+
+**Nhóm 4: Quản lý Snapshots (Snapshot Engine Configs)**
+
+Chế độ quét dữ liệu có sẵn khi vừa bật Debezium Connector.
+
+```JSON
+"snapshot.mode": "initial",
+"snapshot.locking.mode": "none"
+```
+
+- **snapshot.mode:**
+  - **initial (Mặc định)**: Khi khởi chạy lần đầu, Debezium quét sạch các bản ghi đang có trong bảng rồi mới chuyển sang đọc log WAL.
+  - **never**: Bỏ qua dữ liệu quá khứ, chỉ đọc những biến động phát sinh từ thời điểm bắt đầu bật Connector.
+  - **custom**: Cho phép tùy chỉnh logic quét nâng cao.
+- **snapshot.locking.mode = "none"**: Không thực hiện lock bảng trong quá trình chụp Snapshot ban đầu, tránh gây ngưng trệ các API INSERT/UPDATE của hệ thống chính.
+
+**Nhóm 5: Đảm bảo An toàn & Hiệu năng (Performance & Error Handling)**
+
+Những cấu hình này ít khi thấy trong ví dụ Demo nhưng bắt buộc phải biết khi làm hệ thống Production.
+
+```JSON
+"max.batch.size": "2048",
+"max.queue.size": "8192",
+"poll.interval.ms": "500",
+"errors.tolerance": "all",
+"errors.deadletterqueue.topic.name": "dlq_debezium_errors"
+```
+
+- **max.batch.size**: Số lượng bản ghi tối đa Debezium gom lại để xử lý và đẩy sang Kafka trong 1 đợt (Batch Processing). Tăng con số này giúp tăng throughput khi hệ thống có traffic cao.
+- **max.queue.size**: Dung lượng hàng đợi trên RAM của Debezium để chứa các event vừa đọc từ WAL trước khi ghi sang Kafka.
+- **poll.interval.ms**: Khoảng thời gian chờ (trước khi đọc tiếp log WAL) nếu chưa có dữ liệu mới.
+- **errors.tolerance = "all"**:
+  - **none (Mặc định)**: Nếu gặp 1 record lỗi (ví dụ JSON hỏng), Debezium Connector sẽ sập (CRASH) lập tức để bảo đảm an toàn.
+  - **all**: Bỏ qua record lỗi và tiếp tục chạy (cần đi kèm với Dead Letter Queue bên dưới).
+- **errors.deadletterqueue.topic.name**: Đẩy các record bị biến đổi lỗi hoặc không tương thích cấu hình vào một Topic riêng (DLQ) để developer kiểm tra sau, tránh làm tắc nghẽn luồng CDC chính.
