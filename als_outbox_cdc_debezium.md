@@ -1,11 +1,11 @@
-### Chuỗi kiến trúc E-Commerce Order & Inventory System (NestJS + ALS + Outbox + CDC Debezium)
+# Chuỗi kiến trúc E-Commerce Order & Inventory System (NestJS + ALS + Outbox + CDC Debezium)
 
 Hệ thống xử lý Đặt hàng (Orders) và Trừ kho (Inventory) bất đồng bộ chuẩn kiến trúc Microservices, giải quyết triệt để 2 bài toán lớn trong hệ thống phân tán:
 
 - Dual-Write Problem: Đảm bảo dữ liệu đơn hàng và sự kiện (Event) được lưu atomic 100% trong một DB Transaction mà không cần truyền EntityManager/QueryRunner thủ công.
 - Exactly-Once Processing: Đảm bảo Consumer xử lý sự kiện an toàn, chống lặp tin nhắn (Duplicate Messages) ngay cả khi Network bị nháy hay Rebalance Cluster.
 
-### Tổng quan Kiến trúc System Flow
+## Tổng quan Kiến trúc System Flow
 
 ```Bash
 [ Client ]
@@ -48,9 +48,9 @@ Hệ thống xử lý Đặt hàng (Orders) và Trừ kho (Inventory) bất đ�
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Giải thích Chi tiết Từng Luồng Code Chạy (Step-by-Step Flow)
+## Giải thích Chi tiết Từng Luồng Code Chạy (Step-by-Step Flow)
 
-## 1. Luồng Producer: Đặt hàng & Tạo Outbox Event (Order Service)
+### 1. Luồng Producer: Đặt hàng & Tạo Outbox Event (Order Service)
 
 - Khởi tạo AsyncLocalStorage Context:
   Khi Client gửi request POST /orders, middleware của nestjs-cls tạo ra một không gian lưu trữ riêng biệt (AsyncLocalStorage Context) gắn liền với luồng bất đồng bộ của Request đó.
@@ -66,7 +66,7 @@ Hệ thống xử lý Đặt hàng (Orders) và Trừ kho (Inventory) bất đ�
 - Commit & Rollback:
   Nếu cả 2 thao tác thành công -> Transaction COMMIT. Nếu có bất kỳ Exception nào -> Transaction ROLLBACK toàn bộ (Order không được tạo và Outbox Message cũng không sinh ra).
 
-## 2. Luồng Capture & Routing Event: Debezium CDC -> Kafka
+### 2. Luồng Capture & Routing Event: Debezium CDC -> Kafka
 
 - Đọc WAL Log (No DB Polling Overhead):
   Ngay khi PostgreSQL COMMIT thành công, bản ghi outbox_messages mới được ghi trực tiếp vào file Write-Ahead Log (WAL) của PostgreSQL. Debezium Engine đọc file WAL này theo thời gian thực (độ trễ < 10ms)
@@ -78,7 +78,7 @@ Hệ thống xử lý Đặt hàng (Orders) và Trừ kho (Inventory) bất đ�
 - Auto Topic Routing:
   Dựa trên cấu hình "transforms.outbox.route.topic.replacement": "outbox.event.${routedByValue}", Debezium tự động đọc cột aggregatetype (Order) và đẩy message thẳng vào Topic Kafka tên là outbox.event.Order.
 
-## 3. Luồng Consumer & Chống trùng lặp: Inventory Service
+### 3. Luồng Consumer & Chống trùng lặp: Inventory Service
 
 - Tiêu thụ Event từ Kafka:
   NestJS Microservice (InventoryController) lắng nghe Topic outbox.event.Order thông qua @EventPattern('outbox.event.Order').
@@ -93,7 +93,7 @@ Hệ thống xử lý Đặt hàng (Orders) và Trừ kho (Inventory) bất đ�
   - Lưu event_id vào bảng processed_events.
   - Cả 2 thao tác này được bọc lại trong @Transactional() (ALS) của Consumer, cam kết trừ kho xong thì phải ghi được vết processed_events.
 
-### Hướng dẫn Khởi chạy Hệ thống (Quick Start)
+## Hướng dẫn Khởi chạy Hệ thống (Quick Start)
 
 Bài toán thực tế: Hệ thống Đặt hàng & Trừ kho bất đồng bộ (E-Commerce Order System)
 
@@ -104,9 +104,9 @@ Yêu cầu nghiệp vụ:
 - Dùng CDC Debezium (PostgreSQL WAL) để lắng nghe thay đổi từ bảng Outbox và phát Event sang Kafka theo thời gian thực mà không làm tăng CPU/Tải của Database.
 - Dịch vụ Kho (InventoryService) lắng nghe Event từ Kafka, áp dụng Idempotent Consumer để xử lý trừ kho an toàn, tránh bị lặp (Duplicate execution).
 
-## Step 1 Checklist: Những việc cần chạy ngay
+### Step 1 Checklist: Những việc cần chạy ngay
 
-# 1. Khởi chạy Hạ tầng:
+#### 1. Khởi chạy Hạ tầng:
 
 ```YAML
 version: "3.8"
@@ -225,7 +225,7 @@ networks:
 docker compose up -d
 ```
 
-# 2. Cài đặt Package cho NestJS App:
+#### 2. Cài đặt Package cho NestJS App:
 
 Vào project NestJS và cài đặt các thư viện lõi cho ALS, TypeORM, Postgres và Kafka:
 
@@ -233,7 +233,7 @@ Vào project NestJS và cài đặt các thư viện lõi cho ALS, TypeORM, Post
 npm i @nestjs/typeorm typeorm pg @nestjs-cls/transactional @nestjs-cls/transactional-adapter-typeorm nestjs-cls @nestjs/microservices kafkajs
 ```
 
-## Step 2: Cấu hình Debezium Connector Auto Router
+### Step 2: Cấu hình Debezium Connector Auto Router
 
 Tạo file chứa JSON payload cấu hình Debezium Connector để đăng ký với Debezium Connect Engine.
 
@@ -266,7 +266,7 @@ debezium/debezium-outbox-connector.json
 }
 ```
 
-# 1. Nhóm Core & PostgreSQL Engine Configs
+#### 1. Nhóm Core & PostgreSQL Engine Configs
 
 ```JSON
 "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
@@ -288,7 +288,7 @@ Trong đó:
   - White-list filter: Chỉ cho phép Debezium theo dõi duy nhất bảng outbox_messages.
   - Tối ưu: Loại bỏ hoàn toàn việc Debezium đọc và đẩy log từ các bảng nghiệp vụ khác (orders, users...), tránh làm lãng phí IOPS và tài nguyên mạng.
 
-# 2. Nhóm Transform SMT (Single Message Transform) & Outbox Event Router
+#### 2. Nhóm Transform SMT (Single Message Transform) & Outbox Event Router
 
 Đây là phần quan trọng nhất giúp biến Debezium từ một công cụ Sync DB thông thường thành một Event-Driven Messaging Gateway.
 
@@ -317,7 +317,7 @@ Dynamic Topic Routing:
   - Đẩy giá trị từ cột type trong bảng DB (ví dụ: ORDER_CREATED, ORDER_CANCELLED) làm Kafka Record Header với key đặt tên là eventType.
   - Tác dụng: Phía Consumer (NestJS) có thể đọc nhanh Header để filter/route handler bằng Interceptor mà không cần tốn chi phí Parse toàn bộ Body JSON (Payload).
 
-# 3. Nhóm Column Mapping Overrides
+#### 3. Nhóm Column Mapping Overrides
 
 ```JSON
 "transforms.outbox.id.column": "id",
@@ -331,7 +331,7 @@ Dynamic Topic Routing:
   - Tuy nhiên, các ORM như TypeORM hoặc PostgreSQL native thường đưa tên cột không bọc ngoặc kép về dạng chữ thường hoàn toàn (aggregatetype, aggregateid) trong Database Engine.
   - Việc chỉ định rõ các config này nhằm bắt buộc SMT map chính xác với tên cột thực tế trong Postgres System Catalog, tránh tình trạng Debezium báo lỗi IllegalArgumentException: Could not find column... khi vừa khởi chạy.
 
-# 4. Tóm tắt Payload đầu ra trên Kafka Topic sau khi qua Config trên
+#### 4. Tóm tắt Payload đầu ra trên Kafka Topic sau khi qua Config trên
 
 Khi trong DB phát sinh 1 dòng Outbox mới, thay vì nhận một JSON CDC thô dài hàng trăm dòng, Kafka Consumer sẽ nhận được một Kafka Message cực kỳ gọn nhẹ:
 
@@ -352,7 +352,7 @@ Khi trong DB phát sinh 1 dòng Outbox mới, thay vì nhận một JSON CDC th�
 }
 ```
 
-## Step 3. Đăng ký Connector vào Debezium Engine
+### Step 3. Đăng ký Connector vào Debezium Engine
 
 Sau khi container Debezium (localhost:8083) đã sẵn sàng (ở Step 1), mở Terminal mới và execute lệnh cURL để đăng ký Connector bằng file JSON vừa tạo:
 
@@ -396,7 +396,7 @@ Nếu Connector gặp sự cố (State: FAILED), bạn dùng lệnh này để k
 curl -i -X POST http://localhost:8083/connectors/order-outbox-connector/restart
 ```
 
-## Step 4: Test flow bắn HTTP Request tạo Order -> Verify CDC đập Event sang Kafka Topic.
+### Step 4: Test flow bắn HTTP Request tạo Order -> Verify CDC đập Event sang Kafka Topic.
 
 ```Bash
 curl -X POST http://localhost:3000/orders \
