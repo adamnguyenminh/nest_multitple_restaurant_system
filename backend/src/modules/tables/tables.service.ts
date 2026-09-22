@@ -76,7 +76,10 @@ export class TablesService implements ITableActivities {
       .getOne();
 
     // Chỉ nhả bàn nếu status vẫn đang là RESERVED (chưa chuyển sang OCCUPIED/CHECKED_IN)
-    if (table && table.status === TableStatus.RESERVED) {
+    if (
+      table &&
+      [TableStatus.CLEANING, TableStatus.RESERVED].includes(table.status)
+    ) {
       table.status = TableStatus.AVAILABLE;
       await txTableRepo.save(table);
 
@@ -97,6 +100,42 @@ export class TablesService implements ITableActivities {
         },
       });
       await txOutboxRepo.save(outboxMessage);
+    }
+  }
+
+  // API 2: Lễ tân bấm "Check-in" khi Khách tới
+  @Transactional()
+  async checkInTableActivity(tableId: number) {
+    const txTableRepo = this.txHost.tx.getRepository(Table);
+
+    const table = await txTableRepo
+      .createQueryBuilder('table')
+      .setLock('pessimistic_write')
+      .where('table.id = :id', { id: tableId })
+      .getOne();
+
+    if (table && table.status === TableStatus.RESERVED) {
+      table.status = TableStatus.SEATED;
+      await txTableRepo.save(table);
+    }
+  }
+
+  @Transactional()
+  async cleanTableActivity(tableId: number) {
+    const txTableRepo = this.txHost.tx.getRepository(Table);
+
+    const table = await txTableRepo
+      .createQueryBuilder('table')
+      .setLock('pessimistic_write')
+      .where('table.id = :id', { id: tableId })
+      .getOne();
+
+    if (
+      table &&
+      [TableStatus.SEATED, TableStatus.RESERVED].includes(table.status)
+    ) {
+      table.status = TableStatus.CLEANING;
+      await txTableRepo.save(table);
     }
   }
 }

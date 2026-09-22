@@ -26,4 +26,16 @@ export class TableActivities implements ITableActivities {
       return await this.tablesService.releaseTableActivity(tableId);
     });
   }
+
+  async checkInTableActivity(tableId: number) {
+    return this.cls.run(async () => {
+      return await this.tablesService.checkInTableActivity(tableId);
+    });
+  }
+
+  async cleanTableActivity(tableId: number) {
+    return this.cls.run(async () => {
+      return await this.tablesService.cleanTableActivity(tableId);
+    });
+  }
 }

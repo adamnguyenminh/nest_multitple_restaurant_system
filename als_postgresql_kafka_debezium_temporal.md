@@ -1,8 +1,8 @@
-### Quá trình thiết lập hệ thống đặt bàn nhà hàng phân tán với NestJS, PostgreSQL, Kafka, Debezium, và Temporal
+# Quá trình thiết lập hệ thống đặt bàn nhà hàng phân tán với NestJS, PostgreSQL, Kafka, Debezium, và Temporal
 
 Dưới đây là tổng hợp toàn bộ bài học kinh nghiệm (Lessons Learned) từ quá trình thiết lập hệ thống đặt bàn nhà hàng phân tán với NestJS, PostgreSQL, Kafka, Debezium, và Temporal. Tất cả các vấn đề, nguyên nhân cốt lõi và giải pháp áp dụng đều được chi tiết hóa bên dưới:
 
-# File docker_compose.yml
+## File docker_compose.yml
 
 ```yml
 version: "3.8"
@@ -164,7 +164,7 @@ networks:
 
 2 database này (chính xác là 2 Database riêng biệt chứa các bảng bên trong) được lưu trữ trực tiếp dưới đĩa cứng thông qua PostgreSQL container (order_postgres). Khi bạn chạy container temporalio/auto-setup, Temporal Server sẽ tự động khởi tạo 2 database này để phục vụ các mục đích cốt lõi sau:
 
-# 1. Database temporal (Persistence Store)
+### 1. Database temporal (Persistence Store)
 
 Đây là Database lưu trữ trạng thái chính (Primary State Store) của Temporal Server. Nó đóng vai trò là "bộ nhớ bền vững" giúp Temporal đạt được đặc tính Durable Execution (chạy không bao giờ mất trạng thái).
 
@@ -175,7 +175,7 @@ Vai trò chính:
 - Task Queues & Timers: Lưu danh sách các nhiệm vụ đang chờ Worker nhặt về xử lý (table-reservation-queue) và các bộ đếm thời gian bền vững (như lệnh await sleep('2 minutes') trong code của bạn).
 - Locks & Namespaces: Quản lý metadata của namespace (mặc định là default) và cơ chế Distributed Lock nội bộ của Temporal.
 
-# 2. Database temporal_visibility (Visibility Store)
+### 2. Database temporal_visibility (Visibility Store)
 
 Đây là Database phục vụ cho việc truy vấn và hiển thị (Search & Query Engine), chủ yếu được dùng bởi Temporal Web UI (http://localhost:8233).
 
@@ -184,7 +184,7 @@ Vai trò chính:
 - Tìm kiếm và Lọc Workflows: Lưu trữ index các thông tin tổng quan của Workflow để bạn có thể search/filter nhanh trên UI theo WorkflowId, WorkflowType, StartTime, Status (Running, Completed, Failed...).
 - Phân tách tải (Performance Optimization): Giúp việc người dùng mở Web UI hoặc thực hiện các câu lệnh tìm kiếm nâng cao (Search Attributes) không ảnh hưởng hay làm chậm (Lock) đến database chính temporal - nơi đang phải xử lý hàng nghìn giao dịch ghi Event History real-time.
 
-# 3. Tóm lại mối quan hệ trong PostgreSQL của bạn
+### 3. Tóm lại mối quan hệ trong PostgreSQL của bạn
 
 ```Bash
 PostgreSQL Container (order_postgres)
@@ -197,7 +197,7 @@ Cả 3 Database này đều nằm chung trong Postgres Volume (postgres_data) tr
 
 ## Một số lưu ý lỗi đã được khắc phục
 
-# 1. Temporal Client & gRPC Connection Error
+### 1. Temporal Client & gRPC Connection Error
 
 Vấn đề / Lỗi:
 
@@ -213,7 +213,7 @@ Tại sao áp dụng giải pháp này?
 
 - Đổi thuộc tính thành address: 'localhost:7233' trong Connection.connect() giúp khớp đúng interface ConnectionOptions của Temporal SDK. Cổng 7233 là gRPC endpoint chuẩn để SDK truyền nhận lệnh điều phối workflow.
 
-# 2. Temporal Server Driver & Environment Mismatch
+### 2. Temporal Server Driver & Environment Mismatch
 
 Vấn đề / Lỗi:
 
@@ -231,7 +231,7 @@ Tại sao áp dụng giải pháp này?
 - Đổi thành POSTGRES_PWD=secret để script auto-setup đọc đúng password và thực thi script khởi tạo Database Schema cho Temporal (temporal và temporal_visibility).
 - Thêm biến TEMPORAL_UI_ADDRESS=temporal:7233 cho service temporal-ui để Web UI kết nối trực tiếp vào container Temporal Server qua mạng nội bộ Docker (cdc_net).
 
-# 3. PostgreSQL Authentication & Volume Conflict (SASL Auth / 28P01)
+### 3. PostgreSQL Authentication & Volume Conflict (SASL Auth / 28P01)
 
 Vấn đề / Lỗi:
 
@@ -248,7 +248,7 @@ Tại sao áp dụng giải pháp này?
 - Khai báo POSTGRES_HOST_AUTH_METHOD: scram-sha-256 ở Postgres container để đồng bộ phương thức xác thực.
 - Thực hiện docker compose down -v (hoặc docker volume prune -f) để xóa triệt để Volume đĩa cứng cũ, ép PostgreSQL khởi tạo lại mật khẩu mới cùng file init.sql chuẩn ngay từ đầu.
 
-# 4. Bất đồng bộ Vòng đời Temporal Worker trong NestJS
+### 4. Bất đồng bộ Vòng đời Temporal Worker trong NestJS
 
 Vấn đề / Lỗi:
 
@@ -264,7 +264,7 @@ Tại sao áp dụng giải pháp này?
 - Đăng ký danh sách hoạt động (activities) bằng cách bind context service: this.tableActivities.reserveTableActivity.bind(this.tableActivities).
 - Lưu ý quan trọng: Không dùng await worker.run() trong onModuleInit() để tránh làm treo (block) tiến trình khởi động HTTP Server của NestJS.
 
-# 5. Khóa bi quan và Mất Context Transaction trong Tiến trình Ngầm (ALS / CLS)
+### 5. Khóa bi quan và Mất Context Transaction trong Tiến trình Ngầm (ALS / CLS)
 
 Vấn đề / Lỗi:
 
@@ -286,11 +286,11 @@ Yêu cầu "Đợi 30 phút hoặc 7 ngày sau thì kích hoạt Action" (ví d�
 
 Khi kết hợp với chuỗi kiến trúc NestJS + ALS + Outbox Pattern + CDC (Debezium), tầng Scheduler sẽ nằm ở phía sau Event Stream để quản lý yếu tố thời gian và sự kiện trong tương lai.
 
-# 1. Phân tích chi tiết: BullMQ (Redis)
+## Phân tích chi tiết: BullMQ (Redis)
 
 BullMQ là một thư viện Node.js/TypeScript chạy trên nền Redis (sử dụng Redis Data Structures như ZSET, Hashes, Streams), rất thích hợp cho các ứng dụng NestJS/Node.js.
 
-# 2. Cơ chế Delayed Job của BullMQ
+### 1. Cơ chế Delayed Job của BullMQ
 
 Dữ liệu chính: BullMQ sử dụng Redis ZSET (Sorted Set) cho các Delayed Jobs.
 
@@ -326,7 +326,7 @@ async function scheduleReminder(reservationId: string, bookingTimeMs: number) {
 }
 ```
 
-# 3. Kịch bản Hủy / Cập nhật Job (Cancellation Pattern)
+### 2. Kịch bản Hủy / Cập nhật Job (Cancellation Pattern)
 
 Trong bài toán đặt bàn: Nếu khách Check-in đúng giờ, ta cần xóa ngay Job nhắc nhở 30 phút để tránh gửi mail/SMS nhầm:
 
@@ -340,7 +340,7 @@ async function cancelReminder(reservationId: string) {
 }
 ```
 
-# 4. Thách thức khi dùng BullMQ cho thời gian dài (7 ngày)
+### 3. Thách thức khi dùng BullMQ cho thời gian dài (7 ngày)
 
 **Lưu trữ trên RAM (Redis Memory Usage):**
 
@@ -354,11 +354,11 @@ async function cancelReminder(reservationId: string) {
 
 - Redis Cluster cần đảm bảo Key của Hash và Key của ZSET nằm cùng Slot (sử dụng Hash Tags như {reservation_tasks}:jobId).
 
-# 5. Phân tích chi tiết: Temporal.io
+## Phân tích chi tiết: Temporal.io
 
 Temporal.io là một nền tảng Durable Execution Engine (Mã nguồn mở) được thiết kế cho các quy trình nghiệp vụ phức tạp, kéo dài hàng giờ, hàng tháng hoặc hàng năm (Long-running Workflows).
 
-# 6. Cơ chế Timer & State Persistence của Temporal
+### 1. Cơ chế Timer & State Persistence của Temporal
 
 - Temporal không dùng Polling hay lưu RAM đơn thuần.
 - Nó sử dụng cơ chế Event Sourcing / Workflow History State.
@@ -398,13 +398,13 @@ export function reservationWorkflow(reservationId: string): void {
 }
 ```
 
-# 7. Lợi thế của Temporal khi delay 7 ngày
+### 2. Lợi thế của Temporal khi delay 7 ngày
 
 - Durable Execution: Dù tất cả API Server / Worker Node bị sập, restart hoặc crash giữa chừng trong 7 ngày, sau khi bật lại, Workflow vẫn chạy tiếp đúng mốc thời gian còn lại mà không mất dữ liệu hay bị lặp lại bước cũ.
 - Tiết kiệm tài nguyên tuyệt đối: Khi đang sleep, Workflow tốn 0% CPU và 0% RAM. Metadata nằm an toàn trong DB disk.
 - Phù hợp với Workflow có sự kiện biến động: Cho phép hủy, tạm dừng, cập nhật thời gian chờ bằng Signals / Queries / Cancellation Scopes cực kỳ dễ dàng bằng code imperative.
 
-# 8. Bảng so sánh chuyên sâu (BullMQ vs. Temporal.io)
+### 3. Bảng so sánh chuyên sâu (BullMQ vs. Temporal.io)
 
 | Tiêu chí                            | BullMQ (Redis)                                                         | Temporal.io                                                                   |
 | :---------------------------------- | :--------------------------------------------------------------------- | :---------------------------------------------------------------------------- |
@@ -416,7 +416,7 @@ export function reservationWorkflow(reservationId: string): void {
 | **Chi phí hạ tầng & Độ phức tạp**   | Rất thấp. Chỉ cần có Redis Instance.                                   | Cao hơn. Cần dựng Temporal Cluster (Server, DB Persistence, UI, Admin tools). |
 | **Xử lý Retry / Backoff**           | Cấu hình cấp Job (attempts, backoff).                                  | Cấu hình chi tiết tới từng Activity độc lập trong Workflow.                   |
 
-# 9. Đề xuất Kiến trúc cho Hệ thống
+## Đề xuất Kiến trúc cho Hệ thống
 
 ```Bash
 [ NestJS API ] (ALS + Transaction)

@@ -19,6 +19,12 @@ export class TemporalWorkerService implements OnModuleInit {
         releaseTableActivity: this.tableActivities.releaseTableActivity.bind(
           this.tableActivities,
         ),
+        checkInTableActivity: this.tableActivities.checkInTableActivity.bind(
+          this.tableActivities,
+        ),
+        cleanTableActivity: this.tableActivities.cleanTableActivity.bind(
+          this.tableActivities,
+        ),
       },
     });
 
